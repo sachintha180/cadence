@@ -1,40 +1,62 @@
-import React, { useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
+import React, { useEffect, useState } from "react";
+import { View, Text, Pressable, StyleSheet } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import {
-  formatDate,
-  statusColor,
-  statusBg,
-  statusLabel,
-} from "@/constants/helpers";
-import { SESSIONS } from "@/constants/sessions";
-
-const INDICATOR_ORDER = [
-  "pacing",
-  "pauses",
-  "fillers",
-  "prosody",
-  "turns",
-  "longestMonologue",
-];
-
-type ResultTab = "overview" | "indicators" | "prompts";
+import type { RecordingSession } from "@/constants/types";
+import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { getRecordingSessionAsync } from "@/services/recordingDb";
 
 export default function ResultsScreen() {
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [tab, setTab] = useState<ResultTab>("overview");
+  const [session, setSession] = useState<RecordingSession | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const session = SESSIONS.find((s) => s.id === Number(id));
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSession() {
+      try {
+        setLoading(true);
+        const nextSession = id ? await getRecordingSessionAsync(id) : null;
+        if (!cancelled) {
+          setSession(nextSession);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load recording.";
+        showToast({ message, kind: "error" });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, showToast]);
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.mutedText}>Loading recording...</Text>
+      </View>
+    );
+  }
 
   if (!session) {
     return (
-      <View style={[styles.container, styles.notFound]}>
-        <Text style={styles.notFoundText}>Session not found.</Text>
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.mutedText}>Recording not found.</Text>
         <Pressable onPress={() => router.back()} style={styles.backButton}>
           <Text style={styles.backButtonText}>Go Back</Text>
         </Pressable>
@@ -42,20 +64,8 @@ export default function ResultsScreen() {
     );
   }
 
-  const orderedIndicators = INDICATOR_ORDER.map((key) => ({
-    key,
-    ...session.indicators[key],
-  })).filter(Boolean);
-
-  const talkRows = [
-    { label: "Teacher", value: session.teacherTalk, color: colors.accent },
-    { label: "Student", value: session.studentTalk, color: colors.student },
-    { label: "Silence", value: session.silence, color: colors.white25 },
-  ];
-
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* Header */}
       <View style={styles.header}>
         <Pressable
           style={({ pressed }) => [
@@ -72,137 +82,38 @@ export default function ResultsScreen() {
           <Text style={styles.backLabel}>Back</Text>
         </Pressable>
         <Text style={styles.headerMeta}>
-          {formatDate(session.date)} - {session.duration}
+          {formatDateTime(session.createdAt)} -{" "}
+          {formatDurationMs(session.durationMs)}
         </Text>
-        <Text style={styles.headerTitle}>{session.title}</Text>
-
-        {/* Tab Bar */}
-        <View style={styles.tabBar}>
-          {(["overview", "indicators", "prompts"] as ResultTab[]).map((t) => (
-            <Pressable key={t} style={styles.tabItem} onPress={() => setTab(t)}>
-              <Text
-                style={[styles.tabLabel, tab === t && styles.tabLabelActive]}
-              >
-                {t.toUpperCase()}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
+        <Text style={styles.headerTitle}>{session.title ?? "Recording"}</Text>
       </View>
 
-      {/* Tab Content */}
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {tab === "overview" && (
-          <>
-            <View style={styles.card}>
-              <Text style={styles.sectionLabel}>TALK DISTRIBUTION</Text>
-              {talkRows.map((row) => (
-                <View key={row.label} style={styles.talkRow}>
-                  <View style={styles.talkLabelRow}>
-                    <Text style={[styles.talkLabel, { color: row.color }]}>
-                      {row.label}
-                    </Text>
-                    <Text style={[styles.talkPercent, { color: row.color }]}>
-                      {row.value}%
-                    </Text>
-                  </View>
-                  <View style={styles.talkBarTrack}>
-                    <View
-                      style={[
-                        styles.talkBarFill,
-                        {
-                          width: `${row.value}%` as `${number}%`,
-                          backgroundColor: row.color,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-              ))}
-            </View>
-
-            <View style={styles.grid}>
-              {orderedIndicators.slice(0, 4).map((ind) => {
-                const sc = statusColor(ind.status);
-                const sb = statusBg(ind.status);
-                const sl = statusLabel(ind.status);
-                return (
-                  <View
-                    key={ind.key}
-                    style={[
-                      styles.miniCard,
-                      { backgroundColor: sb, borderColor: `${sc}22` },
-                    ]}
-                  >
-                    <Text style={styles.miniCardLabel}>
-                      {ind.label.toUpperCase()}
-                    </Text>
-                    <View style={styles.miniCardValueRow}>
-                      <Text style={styles.miniCardValue}>{ind.value}</Text>
-                      <Text style={styles.miniCardUnit}>{ind.unit}</Text>
-                    </View>
-                    <Text style={[styles.miniCardStatus, { color: sc }]}>
-                      {sl}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          </>
-        )}
-
-        {tab === "indicators" && (
-          <View style={styles.indicatorList}>
-            {orderedIndicators.map((ind) => {
-              const sc = statusColor(ind.status);
-              const sl = statusLabel(ind.status);
-              return (
-                <View
-                  key={ind.key}
-                  style={[styles.indicatorCard, { borderColor: `${sc}22` }]}
-                >
-                  <View style={styles.indicatorLeft}>
-                    <Text style={styles.indicatorLabel}>
-                      {ind.label.toUpperCase()}
-                    </Text>
-                    <View style={styles.indicatorValueRow}>
-                      <Text style={styles.indicatorValue}>{ind.value}</Text>
-                      <Text style={styles.indicatorUnit}>{ind.unit}</Text>
-                    </View>
-                  </View>
-                  <View
-                    style={[
-                      styles.statusPill,
-                      { backgroundColor: `${sc}18`, borderColor: `${sc}44` },
-                    ]}
-                  >
-                    <Text style={[styles.statusPillText, { color: sc }]}>
-                      {sl}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
+      <View style={styles.content}>
+        <View style={styles.card}>
+          <MaterialCommunityIcons
+            name="chart-timeline-variant"
+            size={36}
+            color={colors.white30}
+          />
+          <Text style={styles.cardTitle}>Analysis not run yet</Text>
+          <Text style={styles.cardBody}>
+            This recording is saved locally and ready for the preprocessing
+            pipeline.
+          </Text>
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>STATUS</Text>
+            <Text style={styles.metaValue}>{session.status.toUpperCase()}</Text>
           </View>
-        )}
-
-        {tab === "prompts" && (
-          <View style={styles.promptList}>
-            <Text style={styles.disclaimer}>
-              These prompts are designed to support your reflection — not to
-              evaluate your practice.
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>FILE SIZE</Text>
+            <Text style={styles.metaValue}>
+              {session.fileSizeBytes === null
+                ? "-"
+                : `${Math.round(session.fileSizeBytes / 1024)} KB`}
             </Text>
-            {session.prompts.map((prompt, index) => (
-              <View key={index} style={styles.promptCard}>
-                <Text style={styles.promptLabel}>
-                  REFLECTION {String(index + 1).padStart(2, "0")}
-                </Text>
-                <Text style={styles.promptBody}>{prompt}</Text>
-              </View>
-            ))}
           </View>
-        )}
-      </ScrollView>
+        </View>
+      </View>
     </View>
   );
 }
@@ -212,15 +123,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bgBase,
   },
-  notFound: {
+  centered: {
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 24,
   },
-  notFoundText: {
+  mutedText: {
     fontSize: 16,
     color: colors.white40,
     fontFamily: "monospace",
     marginBottom: 16,
+    textAlign: "center",
   },
   backButton: {
     paddingVertical: 10,
@@ -236,6 +149,7 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 24,
     paddingTop: 16,
+    paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: colors.heroBorder,
   },
@@ -262,29 +176,8 @@ const styles = StyleSheet.create({
     color: colors.white,
     lineHeight: 26,
   },
-  tabBar: {
-    flexDirection: "row",
-    marginTop: 20,
-  },
-  tabItem: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: "center",
-  },
-  tabLabel: {
-    fontSize: 12,
-    color: colors.white40,
-    fontFamily: "monospace",
-    letterSpacing: 1,
-  },
-  tabLabelActive: {
-    color: colors.accent,
-  },
-  scrollContent: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 100,
-    gap: 16,
+  content: {
+    padding: 24,
   },
   card: {
     borderRadius: 20,
@@ -293,153 +186,35 @@ const styles = StyleSheet.create({
     borderColor: colors.cardBorder,
     padding: 24,
   },
-  sectionLabel: {
-    fontSize: 12,
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.white,
+    marginTop: 16,
+  },
+  cardBody: {
+    fontSize: 13,
+    lineHeight: 20,
     color: colors.white50,
-    fontFamily: "monospace",
-    letterSpacing: 1,
-    marginBottom: 16,
+    marginTop: 8,
+    marginBottom: 22,
   },
-  talkRow: {
-    marginBottom: 12,
-  },
-  talkLabelRow: {
+  metaRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+    paddingTop: 12,
+    marginTop: 12,
   },
-  talkLabel: {
-    fontSize: 12,
-    fontFamily: "monospace",
-  },
-  talkPercent: {
-    fontSize: 12,
-    fontFamily: "monospace",
-  },
-  talkBarTrack: {
-    height: 4,
-    borderRadius: 99,
-    backgroundColor: colors.white08,
-    overflow: "hidden",
-  },
-  talkBarFill: {
-    height: 4,
-    borderRadius: 99,
-  },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  miniCard: {
-    flex: 1,
-    minWidth: "45%",
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 14,
-    paddingHorizontal: 16,
-  },
-  miniCardLabel: {
-    fontSize: 10,
-    color: colors.white40,
-    fontFamily: "monospace",
-    letterSpacing: 0.6,
-    marginBottom: 6,
-  },
-  miniCardValueRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 4,
-  },
-  miniCardValue: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.white,
-  },
-  miniCardUnit: {
-    fontSize: 11,
-    color: colors.white40,
-  },
-  miniCardStatus: {
-    fontSize: 10,
-    fontFamily: "monospace",
-    marginTop: 4,
-  },
-  indicatorList: {
-    gap: 12,
-  },
-  indicatorCard: {
-    backgroundColor: colors.cardBg,
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 18,
-    paddingHorizontal: 20,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  indicatorLeft: {
-    flex: 1,
-  },
-  indicatorLabel: {
+  metaLabel: {
     fontSize: 11,
     color: colors.white40,
     fontFamily: "monospace",
-    letterSpacing: 0.6,
-    marginBottom: 4,
   },
-  indicatorValueRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: 6,
-  },
-  indicatorValue: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: colors.white,
-  },
-  indicatorUnit: {
-    fontSize: 12,
-    color: colors.white40,
-    fontFamily: "monospace",
-  },
-  statusPill: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 99,
-    borderWidth: 1,
-  },
-  statusPillText: {
+  metaValue: {
     fontSize: 11,
-    fontFamily: "monospace",
-  },
-  promptList: {
-    gap: 14,
-  },
-  disclaimer: {
-    fontSize: 12,
-    color: colors.white35,
-    fontFamily: "monospace",
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  promptCard: {
-    backgroundColor: colors.cardBg,
-    padding: 18,
-    paddingHorizontal: 20,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
-  },
-  promptLabel: {
-    fontSize: 10,
     color: colors.accent,
     fontFamily: "monospace",
-    letterSpacing: 1.5,
-    marginBottom: 8,
-  },
-  promptBody: {
-    fontSize: 14,
-    color: colors.white82,
-    lineHeight: 23,
   },
 });

@@ -1,16 +1,52 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import { formatDate } from "@/constants/helpers";
-import { SESSIONS } from "@/constants/sessions";
-import SessionCard from "@/components/SessionCard";
+import type { RecordingSession } from "@/constants/types";
+import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { listRecordingSessionsAsync } from "@/services/recordingDb";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
+  const [sessions, setSessions] = useState<RecordingSession[]>([]);
+
+  const loadSessions = useCallback(() => {
+    let cancelled = false;
+
+    async function run() {
+      try {
+        const nextSessions = await listRecordingSessionsAsync();
+        if (!cancelled) {
+          setSessions(nextSessions);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load recordings.";
+        showToast({ message, kind: "error" });
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showToast]);
+
+  useFocusEffect(loadSessions);
+
+  const readyCount = sessions.filter(
+    (session) => session.status === "ready",
+  ).length;
+  const totalDurationMs = sessions.reduce(
+    (total, session) => total + session.durationMs,
+    0,
+  );
 
   return (
     <View style={styles.container}>
@@ -20,16 +56,12 @@ export default function HomeScreen() {
           { paddingTop: insets.top },
         ]}
       >
-        {/* Hero Section */}
         <View style={styles.hero}>
-          {/* Header Text */}
           <Text style={styles.wordmark}>CADENCE</Text>
           <Text style={styles.greeting}>{"Good morning,\nMr Sachintha."}</Text>
-          <Text style={styles.heraMeta}>
-            3 sessions analysed - Last on {formatDate("2025-03-03")}
+          <Text style={styles.heroMeta}>
+            {sessions.length} recordings saved locally
           </Text>
-
-          {/* Record Button */}
           <Pressable
             style={({ pressed }) => [
               styles.ctaButton,
@@ -46,11 +78,9 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        {/* Recent Sessions */}
         <View style={styles.section}>
-          {/* Header */}
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Sessions</Text>
+            <Text style={styles.sectionTitle}>Recent Recordings</Text>
             <Pressable
               style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
               onPress={() => router.navigate("/(tabs)/history")}
@@ -66,24 +96,50 @@ export default function HomeScreen() {
             </Pressable>
           </View>
 
-          {/* Recent Session List */}
           <View style={styles.sessionList}>
-            {SESSIONS.slice(0, 2).map((session) => (
-              <SessionCard
+            {sessions.slice(0, 2).map((session) => (
+              <Pressable
                 key={session.id}
-                session={session}
+                style={({ pressed }) => [
+                  styles.recordingCard,
+                  { opacity: pressed ? 0.75 : 1 },
+                ]}
                 onPress={() => router.push(`/results/${session.id}`)}
-              />
+              >
+                <View style={styles.recordingRow}>
+                  <View style={styles.recordingContent}>
+                    <Text style={styles.recordingTitle}>
+                      {session.title ?? "Recording"}
+                    </Text>
+                    <Text style={styles.recordingMeta}>
+                      {formatDateTime(session.createdAt)} -{" "}
+                      {formatDurationMs(session.durationMs)}
+                    </Text>
+                  </View>
+                  <MaterialCommunityIcons
+                    name="chevron-right"
+                    size={18}
+                    color={colors.white20}
+                  />
+                </View>
+              </Pressable>
             ))}
+
+            {sessions.length === 0 && (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyText}>
+                  Your real recordings will appear here.
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
-        {/* Stats Strip */}
         <View style={styles.statsCard}>
           {[
-            { label: "Sessions", value: "3" },
-            { label: "Avg Talk", value: "65%" },
-            { label: "Avg Pace", value: "138wpm" },
+            { label: "Recordings", value: String(sessions.length) },
+            { label: "Ready", value: String(readyCount) },
+            { label: "Total Time", value: formatDurationMs(totalDurationMs) },
           ].map((stat) => (
             <View key={stat.label} style={styles.statItem}>
               <Text style={styles.statValue}>{stat.value}</Text>
@@ -124,7 +180,7 @@ const styles = StyleSheet.create({
     color: colors.white,
     lineHeight: 32,
   },
-  heraMeta: {
+  heroMeta: {
     fontSize: 13,
     color: colors.white45,
     fontFamily: "monospace",
@@ -175,6 +231,47 @@ const styles = StyleSheet.create({
   },
   sessionList: {
     gap: 12,
+  },
+  recordingCard: {
+    padding: 16,
+    paddingHorizontal: 18,
+    borderRadius: 16,
+    backgroundColor: colors.cardBg,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  recordingRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  recordingContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  recordingTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.white,
+    lineHeight: 18,
+  },
+  recordingMeta: {
+    fontSize: 11,
+    color: colors.white40,
+    fontFamily: "monospace",
+    marginTop: 4,
+  },
+  emptyCard: {
+    borderRadius: 16,
+    backgroundColor: colors.cardBg,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    padding: 18,
+  },
+  emptyText: {
+    fontSize: 12,
+    color: colors.white40,
+    textAlign: "center",
   },
   statsCard: {
     flexDirection: "row",

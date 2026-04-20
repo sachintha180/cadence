@@ -1,85 +1,378 @@
-import React, { useState, useEffect, useRef } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
-import { router } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AppState,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import {
+  createAudioPlayer,
+  getRecordingPermissionsAsync,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+  type AudioPlayer,
+} from "expo-audio";
+import * as Crypto from "expo-crypto";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import { SESSIONS } from "@/constants/sessions";
-import { formatElapsed } from "@/constants/helpers";
-import type { RecordingPhase } from "@/constants/types";
-
-const PROCESSING_STEPS = [
-  { label: "Extracting acoustic features...", target: 30, delay: 600 },
-  { label: "Running speaker diarization...", target: 55, delay: 1400 },
-  { label: "Probing Wav2Vec 2.0 embeddings...", target: 78, delay: 1200 },
-  { label: "Computing diagnostic indicators...", target: 95, delay: 1000 },
-  { label: "Generating reflective prompts...", target: 100, delay: 800 },
-];
+import {
+  MAX_RECORDING_DURATION_MS,
+  MIN_VALID_RECORDING_MS,
+} from "@/constants/recording";
+import type { RecorderState, RecordingSession } from "@/constants/types";
+import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import {
+  createRecordingSessionAsync,
+  updateRecordingSessionAsync,
+} from "@/services/recordingDb";
+import {
+  ensureRecordingsDirectoryAsync,
+  getRecordingPath,
+  persistRecordingAsync,
+  validateRecordingFileAsync,
+} from "@/services/recordingFiles";
+import { logRecorderEvent } from "@/services/recordingLog";
 
 export default function RecordScreen() {
   const insets = useSafeAreaInsets();
-  const [phase, setPhase] = useState<RecordingPhase>("idle");
-  const [elapsed, setElapsed] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const [processLabel, setProcessLabel] = useState("Initialising pipeline...");
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { showToast } = useToast();
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const audioRecorderState = useAudioRecorderState(audioRecorder, 500);
+  const [recorderState, setRecorderState] = useState<RecorderState>("idle");
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [activeSession, setActiveSession] = useState<RecordingSession | null>(
+    null,
+  );
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const stateRef = useRef<RecorderState>("idle");
+  const stoppingRef = useRef(false);
 
   useEffect(() => {
-    if (phase === "recording") {
-      timerRef.current = setInterval(() => {
-        setElapsed((e) => e + 1);
-      }, 1000);
-    } else {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
+    stateRef.current = recorderState;
+  }, [recorderState]);
+
+  const stopPlayback = useCallback(async () => {
+    if (playerRef.current) {
+      playerRef.current.remove();
+      playerRef.current = null;
     }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [phase]);
+    setIsPlaying(false);
+  }, []);
 
-  function startProcessing() {
-    let currentProgress = 0;
+  const finishRecording = useCallback(
+    async (autoStopped = false) => {
+      const session = activeSession;
 
-    function runStep(stepIndex: number) {
-      if (stepIndex >= PROCESSING_STEPS.length) {
-        setTimeout(() => setPhase("done"), 400);
+      if (!session || stoppingRef.current) {
         return;
       }
-      const step = PROCESSING_STEPS[stepIndex];
-      setProcessLabel(step.label);
 
-      const interval = setInterval(() => {
-        currentProgress += 1;
-        setProgress(currentProgress);
-        if (currentProgress >= step.target) {
-          clearInterval(interval);
-          setTimeout(() => runStep(stepIndex + 1), step.delay);
+      stoppingRef.current = true;
+      setRecorderState("stopping");
+
+      try {
+        const status = audioRecorder.getStatus();
+        const durationMs = status.durationMillis ?? elapsedMs;
+
+        await audioRecorder.stop();
+
+        const sourceUri = audioRecorder.uri;
+
+        if (!sourceUri) {
+          throw new Error("Recording did not return a file URI.");
         }
-      }, 18);
+
+        logRecorderEvent(
+          autoStopped ? "recording_auto_stopped" : "recording_stopped",
+          { sessionId: session.id, details: { durationMs } },
+        );
+
+        setRecorderState("validating");
+        const audioPath = await persistRecordingAsync(sourceUri, session.id);
+        await updateRecordingSessionAsync(session.id, {
+          audioPath,
+          durationMs,
+          status: "stopped",
+        });
+        const validation = await validateRecordingFileAsync(
+          audioPath,
+          durationMs,
+        );
+
+        const readySession: RecordingSession = {
+          ...session,
+          audioPath,
+          durationMs,
+          status: "ready",
+          fileSizeBytes: validation.fileSizeBytes,
+          errorMessage: null,
+          updatedAt: new Date().toISOString(),
+        };
+
+        await updateRecordingSessionAsync(session.id, {
+          audioPath,
+          durationMs,
+          status: "ready",
+          fileSizeBytes: validation.fileSizeBytes,
+          errorMessage: null,
+        });
+
+        logRecorderEvent("recording_validated", {
+          sessionId: session.id,
+          details: { durationMs, fileSizeBytes: validation.fileSizeBytes },
+        });
+
+        setActiveSession(readySession);
+        setElapsedMs(durationMs);
+        setRecorderState("ready");
+        showToast({
+          message: autoStopped
+            ? "Recording stopped at 90 minutes."
+            : "Recording saved.",
+          kind: "success",
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Recording failed.";
+
+        if (session) {
+          await updateRecordingSessionAsync(session.id, {
+            durationMs: elapsedMs,
+            status: "failed",
+            errorMessage: message,
+          });
+          logRecorderEvent("recording_failed", {
+            sessionId: session.id,
+            details: { message },
+          });
+        }
+
+        setRecorderState("failed");
+        showToast({ message, kind: "error" });
+      } finally {
+        stoppingRef.current = false;
+      }
+    },
+    [activeSession, audioRecorder, elapsedMs, showToast],
+  );
+
+  const pauseRecording = useCallback(
+    async (fromInterruption = false) => {
+      if (stateRef.current !== "recording") {
+        return;
+      }
+
+      try {
+        audioRecorder.pause();
+        const status = audioRecorder.getStatus();
+        setElapsedMs(status.durationMillis ?? elapsedMs);
+        setRecorderState("paused");
+        logRecorderEvent("recording_paused", {
+          sessionId: activeSession?.id,
+          details: { fromInterruption },
+        });
+
+        if (fromInterruption) {
+          showToast({ message: "Recording paused.", kind: "info" });
+        }
+      } catch (error) {
+        logRecorderEvent("interruption_pause_failed_saved", {
+          sessionId: activeSession?.id,
+          details: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+        await finishRecording(false);
+      }
+    },
+    [activeSession?.id, audioRecorder, elapsedMs, finishRecording, showToast],
+  );
+
+  useEffect(() => {
+    if (recorderState === "recording" || recorderState === "paused") {
+      const durationMs = audioRecorderState.durationMillis ?? 0;
+      setElapsedMs(durationMs);
+
+      if (
+        durationMs >= MAX_RECORDING_DURATION_MS &&
+        stateRef.current === "recording"
+      ) {
+        finishRecording(true);
+      }
+    }
+  }, [audioRecorderState.durationMillis, finishRecording, recorderState]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState !== "active" && stateRef.current === "recording") {
+        pauseRecording(true);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [pauseRecording]);
+
+  useEffect(() => {
+    return () => {
+      audioRecorder.stop().catch(() => undefined);
+      playerRef.current?.remove();
+    };
+  }, [audioRecorder]);
+
+  async function requestRecordingPermission() {
+    setRecorderState("requesting_permission");
+    logRecorderEvent("permission_requested");
+
+    const current = await getRecordingPermissionsAsync();
+    const permission = current.granted
+      ? current
+      : await requestRecordingPermissionsAsync();
+
+    if (permission.granted) {
+      logRecorderEvent("permission_granted");
+      return true;
     }
 
-    runStep(0);
+    logRecorderEvent("permission_denied", {
+      details: { canAskAgain: permission.canAskAgain },
+    });
+
+    showToast({
+      message: permission.canAskAgain
+        ? "Microphone permission is required to record."
+        : "Microphone permission is disabled. Open settings to enable it.",
+      kind: "error",
+      actionLabel: permission.canAskAgain ? undefined : "Open Settings",
+      onAction: permission.canAskAgain
+        ? undefined
+        : () => Linking.openSettings(),
+    });
+
+    setRecorderState("idle");
+    return false;
   }
 
-  function handleBeginRecording() {
-    setElapsed(0);
-    setPhase("recording");
+  async function beginRecording() {
+    try {
+      await stopPlayback();
+      const hasPermission = await requestRecordingPermission();
+
+      if (!hasPermission) {
+        return;
+      }
+
+      setRecorderState("preparing");
+      await ensureRecordingsDirectoryAsync();
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
+        interruptionMode: "doNotMix",
+        shouldPlayInBackground: false,
+        shouldRouteThroughEarpiece: false,
+        allowsBackgroundRecording: false,
+      });
+
+      const id = Crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const title = `Recording - ${formatDateTime(createdAt)}`;
+      const session: RecordingSession = {
+        id,
+        createdAt,
+        audioPath: getRecordingPath(id),
+        durationMs: 0,
+        status: "recording",
+        fileSizeBytes: null,
+        title,
+        errorMessage: null,
+        updatedAt: createdAt,
+      };
+
+      await createRecordingSessionAsync(session);
+
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+
+      setActiveSession(session);
+      setElapsedMs(0);
+      setRecorderState("recording");
+      logRecorderEvent("recording_started", { sessionId: id });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not start recording.";
+      setRecorderState("failed");
+      showToast({ message, kind: "error" });
+      logRecorderEvent("recording_failed", { details: { message } });
+    }
   }
 
-  function handleStopAndAnalyse() {
-    setPhase("processing");
-    setProgress(0);
-    setProcessLabel("Initialising pipeline...");
-    startProcessing();
+  async function resumeRecording() {
+    if (recorderState !== "paused") {
+      return;
+    }
+
+    try {
+      audioRecorder.record();
+      setRecorderState("recording");
+      logRecorderEvent("recording_resumed", { sessionId: activeSession?.id });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not resume recording.";
+      showToast({ message, kind: "error" });
+      logRecorderEvent("recording_failed", {
+        sessionId: activeSession?.id,
+        details: { message },
+      });
+    }
   }
 
-  function handleViewResults() {
-    router.push(`/results/${SESSIONS[0].id}`);
+  async function togglePlayback() {
+    if (!activeSession || recorderState !== "ready") {
+      return;
+    }
+
+    try {
+      if (isPlaying) {
+        await stopPlayback();
+        return;
+      }
+
+      const player = createAudioPlayer({ uri: activeSession.audioPath });
+      player.play();
+
+      playerRef.current = player;
+      setIsPlaying(true);
+      logRecorderEvent("playback_started", { sessionId: activeSession.id });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not play recording.";
+      showToast({ message, kind: "error" });
+      logRecorderEvent("playback_failed", {
+        sessionId: activeSession.id,
+        details: { message },
+      });
+    }
   }
+
+  const canStart =
+    recorderState === "idle" ||
+    recorderState === "ready" ||
+    recorderState === "failed";
+  const isBusy =
+    recorderState === "requesting_permission" ||
+    recorderState === "preparing" ||
+    recorderState === "stopping" ||
+    recorderState === "validating";
 
   return (
     <View style={styles.container}>
@@ -90,108 +383,127 @@ export default function RecordScreen() {
         ]}
       >
         <View style={styles.inner}>
-          {phase === "idle" && (
-            <>
-              {/* New Recording Text Header */}
-              <Text style={styles.title}>New Recording</Text>
-              <Text style={styles.subtitle}>
-                Position your device to capture the classroom
-              </Text>
+          <Text style={styles.title}>New Recording</Text>
+          <Text style={styles.subtitle}>
+            Position your device to capture the classroom
+          </Text>
 
-              {/* Waveform Icon */}
-              <View style={styles.card}>
-                <MaterialCommunityIcons
-                  name="waveform"
-                  size={48}
-                  color={colors.white15}
-                />
-                <Text style={styles.timerInactive}>{formatElapsed(0)}</Text>
-              </View>
+          <View
+            style={[
+              styles.card,
+              recorderState === "recording" && styles.cardAccentBorder,
+            ]}
+          >
+            <MaterialCommunityIcons
+              name="waveform"
+              size={48}
+              color={
+                recorderState === "recording" ? colors.accent : colors.white15
+              }
+            />
+            <Text
+              style={[
+                styles.timer,
+                recorderState === "recording" && styles.timerActive,
+              ]}
+            >
+              {formatDurationMs(elapsedMs)}
+            </Text>
+            <Text style={styles.stateLabel}>{recorderState.toUpperCase()}</Text>
+          </View>
 
-              {/* Begin Recording Button */}
+          {recorderState === "recording" && (
+            <View style={styles.buttonRow}>
               <Pressable
                 style={({ pressed }) => [
-                  styles.primaryButton,
+                  styles.secondaryButton,
                   { opacity: pressed ? 0.85 : 1 },
                 ]}
-                onPress={handleBeginRecording}
+                onPress={() => pauseRecording(false)}
               >
-                <Text style={styles.primaryButtonText}>Begin Recording</Text>
+                <Text style={styles.secondaryButtonText}>Pause</Text>
               </Pressable>
-            </>
-          )}
-
-          {phase === "recording" && (
-            <>
-              {/* Recording Icon + Label */}
-              <View style={styles.recordingBadge}>
-                <View style={styles.recordingDot} />
-                <Text style={styles.recordingText}>RECORDING</Text>
-              </View>
-
-              {/* Recording Timer */}
-              <View style={[styles.card, styles.cardAccentBorder]}>
-                <MaterialCommunityIcons
-                  name="waveform"
-                  size={48}
-                  color={colors.accent}
-                />
-                <Text style={styles.timerActive}>{formatElapsed(elapsed)}</Text>
-              </View>
-
-              {/* Recording Stop */}
               <Pressable
                 style={({ pressed }) => [
                   styles.dangerButton,
                   { opacity: pressed ? 0.85 : 1 },
                 ]}
-                onPress={handleStopAndAnalyse}
+                onPress={() => finishRecording(false)}
               >
-                <Text style={styles.dangerButtonText}>Stop & Analyse</Text>
+                <Text style={styles.dangerButtonText}>Stop</Text>
               </Pressable>
-            </>
+            </View>
           )}
 
-          {phase === "processing" && (
-            <>
-              {/* Session Analysis Mockup */}
-              <Text style={styles.title}>Analysing Session</Text>
-              <Text style={styles.subtitle}>
-                On-device - No data leaves your phone
-              </Text>
-              <View style={styles.card}>
-                <Text style={styles.progressPercent}>{progress}%</Text>
-              </View>
-              <Text style={styles.processLabel}>{processLabel}</Text>
-            </>
-          )}
-
-          {phase === "done" && (
-            <>
-              {/* Analysis Complete Header */}
-              <MaterialCommunityIcons
-                name="check-circle-outline"
-                size={40}
-                color={colors.accent}
-                style={styles.doneIcon}
-              />
-              <Text style={styles.title}>Analysis Complete</Text>
-              <Text style={styles.subtitle}>
-                Your session is ready to review
-              </Text>
-
-              {/* View Results Button */}
+          {recorderState === "paused" && (
+            <View style={styles.buttonRow}>
               <Pressable
                 style={({ pressed }) => [
                   styles.primaryButton,
+                  styles.buttonHalf,
                   { opacity: pressed ? 0.85 : 1 },
                 ]}
-                onPress={handleViewResults}
+                onPress={resumeRecording}
               >
-                <Text style={styles.primaryButtonText}>View Results</Text>
+                <Text style={styles.primaryButtonText}>Resume</Text>
               </Pressable>
-            </>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.dangerButton,
+                  { opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={() => finishRecording(false)}
+              >
+                <Text style={styles.dangerButtonText}>Stop</Text>
+              </Pressable>
+            </View>
           )}
+
+          {canStart && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryButton,
+                { opacity: pressed ? 0.85 : 1 },
+              ]}
+              onPress={beginRecording}
+            >
+              <Text style={styles.primaryButtonText}>Begin Recording</Text>
+            </Pressable>
+          )}
+
+          {isBusy && (
+            <Text style={styles.processLabel}>
+              {recorderState === "validating"
+                ? "Checking recording..."
+                : "Preparing recorder..."}
+            </Text>
+          )}
+
+          {recorderState === "ready" && activeSession && (
+            <View style={styles.playbackCard}>
+              <Text style={styles.playbackTitle}>Recording ready</Text>
+              <Text style={styles.playbackMeta}>
+                {formatDurationMs(activeSession.durationMs)} -{" "}
+                {Math.round((activeSession.fileSizeBytes ?? 0) / 1024)} KB
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  { opacity: pressed ? 0.85 : 1 },
+                ]}
+                onPress={togglePlayback}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {isPlaying ? "Stop Playback" : "Play Recording"}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          <Text style={styles.limitText}>
+            Minimum {Math.floor(MIN_VALID_RECORDING_MS / 1000)} seconds. Maximum
+            90 minutes.
+          </Text>
         </View>
       </ScrollView>
     </View>
@@ -241,7 +553,7 @@ const styles = StyleSheet.create({
   cardAccentBorder: {
     borderColor: colors.accentBorderStrong,
   },
-  timerInactive: {
+  timer: {
     fontSize: 32,
     fontWeight: "700",
     color: colors.white20,
@@ -250,54 +562,18 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   timerActive: {
-    fontSize: 32,
-    fontWeight: "700",
     color: colors.accent,
-    fontFamily: "monospace",
-    marginTop: 16,
-    textAlign: "center",
   },
-  recordingBadge: {
+  stateLabel: {
+    fontSize: 11,
+    color: colors.white40,
+    fontFamily: "monospace",
+    marginTop: 8,
+  },
+  buttonRow: {
+    width: "100%",
     flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: colors.dangerBg,
-    borderWidth: 1,
-    borderColor: colors.dangerBorder,
-    borderRadius: 99,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    marginBottom: 24,
-  },
-  recordingDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 99,
-    backgroundColor: colors.danger,
-  },
-  recordingText: {
-    fontSize: 12,
-    color: colors.danger,
-    fontFamily: "monospace",
-  },
-  progressPercent: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: colors.accent,
-    fontFamily: "monospace",
-    textAlign: "center",
-    paddingVertical: 16,
-  },
-  processLabel: {
-    fontSize: 12,
-    color: colors.white50,
-    fontFamily: "monospace",
-    textAlign: "center",
-    marginTop: -8,
-    marginBottom: 24,
-  },
-  doneIcon: {
-    marginBottom: 12,
+    gap: 12,
   },
   primaryButton: {
     width: "100%",
@@ -306,13 +582,31 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: "center",
   },
+  buttonHalf: {
+    flex: 1,
+    width: "auto",
+  },
   primaryButtonText: {
     fontSize: 16,
     fontWeight: "700",
     color: colors.bgSurface,
   },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: colors.accentBgSubtle,
+    borderWidth: 1,
+    borderColor: colors.accentBorderStrong,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
+  secondaryButtonText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.accent,
+  },
   dangerButton: {
-    width: "100%",
+    flex: 1,
     backgroundColor: colors.dangerBgAlt,
     borderWidth: 1,
     borderColor: colors.dangerBorderStrong,
@@ -324,5 +618,40 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: colors.danger,
+  },
+  processLabel: {
+    fontSize: 12,
+    color: colors.white50,
+    fontFamily: "monospace",
+    textAlign: "center",
+    marginTop: 16,
+  },
+  playbackCard: {
+    width: "100%",
+    borderRadius: 16,
+    backgroundColor: colors.cardBg,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    padding: 18,
+    marginTop: 18,
+  },
+  playbackTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  playbackMeta: {
+    fontSize: 12,
+    color: colors.white40,
+    fontFamily: "monospace",
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  limitText: {
+    fontSize: 11,
+    color: colors.white35,
+    fontFamily: "monospace",
+    textAlign: "center",
+    marginTop: 20,
   },
 });

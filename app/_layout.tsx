@@ -2,6 +2,7 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
+import { ToastProvider } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
 
 export default function RootLayout() {
@@ -10,21 +11,23 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      {/* Thin top-bar of the app; style='light' renders the icons in white */}
-      <StatusBar style="light" />
+      <ToastProvider>
+        {/* Thin top-bar of the app; style='light' renders the icons in white */}
+        <StatusBar style="light" />
 
-      {/* Expo Router primitive to tell the screens to stack on top of each other */}
-      {/* headerShown: false; hides the default header bar globally */}
-      {/* contentStyle: applies a background color to every screen's content area */}
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: colors.bgBase },
-        }}
-      >
-        {/* Register the (tabs) route in the stack */}
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+        {/* Expo Router primitive to tell the screens to stack on top of each other */}
+        {/* headerShown: false; hides the default header bar globally */}
+        {/* contentStyle: applies a background color to every screen's content area */}
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: colors.bgBase },
+          }}
+        >
+          {/* Register the (tabs) route in the stack */}
+          <Stack.Screen name="(tabs)" />
+        </Stack>
+      </ToastProvider>
     </SafeAreaProvider>
   );
 }

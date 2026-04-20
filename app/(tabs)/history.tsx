@@ -1,17 +1,53 @@
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import colors from "@/constants/colors";
-import { formatDate, statusColor } from "@/constants/helpers";
-import { SESSIONS } from "@/constants/sessions";
 import Pill from "@/components/Pill";
+import { useToast } from "@/components/ToastProvider";
+import colors from "@/constants/colors";
+import type { RecordingSession } from "@/constants/types";
+import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { listRecordingSessionsAsync } from "@/services/recordingDb";
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
-  const total = SESSIONS.length;
+  const { showToast } = useToast();
+  const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadSessions = useCallback(() => {
+    let cancelled = false;
+
+    async function run() {
+      try {
+        setLoading(true);
+        const nextSessions = await listRecordingSessionsAsync();
+        if (!cancelled) {
+          setSessions(nextSessions);
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Could not load recordings.";
+        showToast({ message, kind: "error" });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showToast]);
+
+  useFocusEffect(loadSessions);
+
+  const total = sessions.length;
 
   return (
     <View style={styles.container}>
@@ -21,22 +57,28 @@ export default function HistoryScreen() {
           { paddingTop: insets.top },
         ]}
       >
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.title}>Session History</Text>
-          <Text style={styles.subtitle}>{total} sessions - chronological</Text>
+          <Text style={styles.subtitle}>
+            {loading ? "Loading recordings" : `${total} recordings`}
+          </Text>
         </View>
 
-        {/* History View */}
-        <View style={styles.list}>
-          {SESSIONS.map((session, index) => {
-            const pacingStatus = session.indicators.pacing?.status;
-            const pacingColor = pacingStatus
-              ? statusColor(pacingStatus)
-              : colors.statusNeutral;
-            const pacingValue = session.indicators.pacing?.value;
-
-            return (
+        {total === 0 && !loading ? (
+          <View style={styles.emptyCard}>
+            <MaterialCommunityIcons
+              name="microphone-outline"
+              size={28}
+              color={colors.white30}
+            />
+            <Text style={styles.emptyTitle}>No recordings yet</Text>
+            <Text style={styles.emptyText}>
+              Start a recording to add it to history.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.list}>
+            {sessions.map((session, index) => (
               <Pressable
                 key={session.id}
                 style={({ pressed }) => [
@@ -46,29 +88,30 @@ export default function HistoryScreen() {
                 onPress={() => router.push(`/results/${session.id}`)}
               >
                 <View style={styles.row}>
-                  {/* Session Index */}
                   <View style={styles.badge}>
                     <Text style={styles.badgeText}>#{total - index}</Text>
                   </View>
 
-                  {/* Session Details */}
                   <View style={styles.content}>
-                    <Text style={styles.sessionTitle}>{session.title}</Text>
+                    <Text style={styles.sessionTitle}>
+                      {session.title ?? "Recording"}
+                    </Text>
                     <Text style={styles.meta}>
-                      {formatDate(session.date)} - {session.duration}
+                      {formatDateTime(session.createdAt)} -{" "}
+                      {formatDurationMs(session.durationMs)}
                     </Text>
                     <View style={styles.pills}>
-                      <Pill color={colors.accent}>
-                        Teacher {session.teacherTalk}%
+                      <Pill color={statusColor(session.status)}>
+                        {session.status.toUpperCase()}
                       </Pill>
-                      <Pill color={colors.student}>
-                        Student {session.studentTalk}%
-                      </Pill>
-                      <Pill color={pacingColor}>{pacingValue} wpm</Pill>
+                      {session.fileSizeBytes !== null && (
+                        <Pill color={colors.statusNeutral}>
+                          {Math.round(session.fileSizeBytes / 1024)} KB
+                        </Pill>
+                      )}
                     </View>
                   </View>
 
-                  {/* More Icon */}
                   <MaterialCommunityIcons
                     name="chevron-right"
                     size={20}
@@ -76,12 +119,25 @@ export default function HistoryScreen() {
                   />
                 </View>
               </Pressable>
-            );
-          })}
-        </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </View>
   );
+}
+
+function statusColor(status: RecordingSession["status"]) {
+  switch (status) {
+    case "ready":
+      return colors.statusGood;
+    case "failed":
+      return colors.danger;
+    case "completed":
+      return colors.accent;
+    default:
+      return colors.statusNeutral;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -160,5 +216,26 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: "wrap",
     marginTop: 10,
+  },
+  emptyCard: {
+    marginHorizontal: 24,
+    borderRadius: 18,
+    backgroundColor: colors.cardBg,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    padding: 24,
+    alignItems: "center",
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.white,
+    marginTop: 12,
+  },
+  emptyText: {
+    fontSize: 12,
+    color: colors.white40,
+    textAlign: "center",
+    marginTop: 6,
   },
 });
