@@ -45,3 +45,6 @@ yarn-error.*
 
 # Notes
 notes/
+
+# Models
+models/
