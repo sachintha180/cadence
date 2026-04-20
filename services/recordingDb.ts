@@ -146,8 +146,13 @@ export async function getRecordingSessionAsync(id: string) {
 export async function listRecordingSessionsAsync() {
   const db = await getRecordingDbAsync();
   const rows = await db.getAllAsync<RecordingSessionRow>(
-    "SELECT * FROM recording_sessions ORDER BY created_at DESC",
+    "SELECT * FROM recording_sessions WHERE status != 'failed' ORDER BY created_at DESC",
   );
 
   return rows.map(rowToRecordingSession);
+}
+
+export async function deleteRecordingSessionAsync(id: string) {
+  const db = await getRecordingDbAsync();
+  await db.runAsync("DELETE FROM recording_sessions WHERE id = ?", id);
 }

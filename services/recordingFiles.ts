@@ -66,3 +66,13 @@ export async function validateRecordingFileAsync(
 
   return { fileSizeBytes: size };
 }
+
+export async function deleteRecordingFileAsync(audioPath: string) {
+  const info = await FileSystem.getInfoAsync(audioPath);
+
+  if (!info.exists) {
+    return;
+  }
+
+  await FileSystem.deleteAsync(audioPath, { idempotent: true });
+}
