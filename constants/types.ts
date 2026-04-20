@@ -21,3 +21,33 @@ export type Session = {
 };
 
 export type RecordingPhase = "idle" | "recording" | "processing" | "done";
+
+export type RecordingSessionStatus =
+  | "recording"
+  | "stopped"
+  | "ready"
+  | "completed"
+  | "failed";
+
+export type RecordingSession = {
+  id: string;
+  createdAt: string;
+  audioPath: string;
+  durationMs: number;
+  status: RecordingSessionStatus;
+  fileSizeBytes: number | null;
+  title: string | null;
+  errorMessage: string | null;
+  updatedAt: string;
+};
+
+export type RecorderState =
+  | "idle"
+  | "requesting_permission"
+  | "preparing"
+  | "recording"
+  | "paused"
+  | "stopping"
+  | "validating"
+  | "ready"
+  | "failed";
