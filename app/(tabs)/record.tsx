@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import colors from "@/constants/colors";
 import { SESSIONS } from "@/constants/sessions";
+import { formatElapsed } from "@/constants/helpers";
 import type { RecordingPhase } from "@/constants/types";
 
 const PROCESSING_STEPS = [
@@ -15,14 +16,6 @@ const PROCESSING_STEPS = [
   { label: "Computing diagnostic indicators...", target: 95, delay: 1000 },
   { label: "Generating reflective prompts...", target: 100, delay: 800 },
 ];
-
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0");
-  const s = (seconds % 60).toString().padStart(2, "0");
-  return `${m}:${s}`;
-}
 
 export default function RecordScreen() {
   const insets = useSafeAreaInsets();
