@@ -66,7 +66,7 @@ export default function HomeScreen() {
             </Pressable>
           </View>
 
-          {/* Recents List */}
+          {/* Recent Session List */}
           <View style={styles.sessionList}>
             {SESSIONS.slice(0, 2).map((session) => (
               <SessionCard
