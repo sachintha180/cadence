@@ -3,9 +3,10 @@ import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
 import { router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import colors from "../../constants/colors";
-import { SESSIONS } from "../../constants/sessions";
-import type { RecordingPhase } from "../../constants/types";
+
+import colors from "@/constants/colors";
+import { SESSIONS } from "@/constants/sessions";
+import type { RecordingPhase } from "@/constants/types";
 
 const PROCESSING_STEPS = [
   { label: "Extracting acoustic features...", target: 30, delay: 600 },
