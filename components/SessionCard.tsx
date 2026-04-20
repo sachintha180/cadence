@@ -23,7 +23,7 @@ export default function SessionCard({ session, onPress }: Props) {
         <View style={styles.content}>
           <Text style={styles.title}>{session.title}</Text>
           <Text style={styles.meta}>
-            {formatDate(session.date)} · {session.duration}
+            {formatDate(session.date)} - {session.duration}
           </Text>
         </View>
         <MaterialCommunityIcons

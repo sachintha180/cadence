@@ -72,7 +72,7 @@ export default function ResultsScreen() {
           <Text style={styles.backLabel}>Back</Text>
         </Pressable>
         <Text style={styles.headerMeta}>
-          {formatDate(session.date)} · {session.duration}
+          {formatDate(session.date)} - {session.duration}
         </Text>
         <Text style={styles.headerTitle}>{session.title}</Text>
 
