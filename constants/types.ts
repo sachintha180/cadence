@@ -26,8 +26,7 @@ export type RecordingSessionStatus =
   | "recording"
   | "stopped"
   | "ready"
-  | "completed"
-  | "failed";
+  | "completed";
 
 export type RecordingSession = {
   id: string;
