@@ -1,10 +1,12 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import colors from "../constants/colors";
+
+import colors from "@/constants/colors";
 
 export default function RootLayout() {
   // Save Area Provider: Ensures content won't bleed under the status bar / navigation buttons
+  // Basically a runtime context provider, which enables running seSafeAreaInsets in child routes
 
   return (
     <SafeAreaProvider>
