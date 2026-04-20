@@ -28,8 +28,14 @@ import {
   MAX_RECORDING_DURATION_MS,
   MIN_VALID_RECORDING_MS,
 } from "@/constants/recording";
-import type { RecorderState, RecordingSession } from "@/constants/types";
+import type {
+  AnalysisJob,
+  RecorderState,
+  RecordingSession,
+} from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
+import { preprocessRecordingAsync } from "@/services/audioPreprocessing";
 import {
   createRecordingSessionAsync,
   updateRecordingSessionAsync,
@@ -56,6 +62,8 @@ export default function RecordScreen() {
   const [playbackState, setPlaybackState] = useState<
     "idle" | "playing" | "paused"
   >("idle");
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
+  const [isPreprocessing, setIsPreprocessing] = useState(false);
 
   const playerRef = useRef<AudioPlayer | null>(null);
   const playbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -107,7 +115,10 @@ export default function RecordScreen() {
     audioPath?: string | null,
   ) {
     try {
-      await discardRecordingSessionAsync(session, audioPath ?? session.audioPath);
+      await discardRecordingSessionAsync(
+        session,
+        audioPath ?? session.audioPath,
+      );
     } catch (error) {
       logRecorderEvent("recording_failed", {
         sessionId: session.id,
@@ -115,6 +126,19 @@ export default function RecordScreen() {
           cleanupError: error instanceof Error ? error.message : String(error),
         },
       });
+    }
+  }
+
+  async function loadAnalysisJob(sessionId: string) {
+    try {
+      const job = await getAnalysisJobForRecordingAsync(sessionId);
+      setAnalysisJob(job);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not load preprocessing status.";
+      showToast({ message, kind: "error" });
     }
   }
 
@@ -185,6 +209,7 @@ export default function RecordScreen() {
           });
 
           setActiveSession(readySession);
+          setAnalysisJob(null);
           setElapsedMs(durationMs);
           setRecorderState("ready");
           showToast({
@@ -327,6 +352,7 @@ export default function RecordScreen() {
       }
 
       setRecorderState("preparing");
+      setAnalysisJob(null);
       await ensureRecordingsDirectoryAsync();
       await setAudioModeAsync({
         allowsRecording: true,
@@ -399,7 +425,7 @@ export default function RecordScreen() {
   }
 
   async function togglePlayback() {
-    if (!activeSession || recorderState !== "ready") {
+    if (!activeSession || recorderState !== "ready" || isPreprocessing) {
       return;
     }
 
@@ -435,11 +461,42 @@ export default function RecordScreen() {
     }
   }
 
+  async function processRecording() {
+    if (!activeSession || recorderState !== "ready" || isPreprocessing) {
+      return;
+    }
+
+    try {
+      await stopPlayback();
+      setIsPreprocessing(true);
+      const nextJob = await preprocessRecordingAsync(activeSession.id);
+      setAnalysisJob(nextJob);
+
+      if (nextJob.status === "preprocessed") {
+        showToast({ message: "Recording processed.", kind: "success" });
+      } else {
+        showToast({
+          message: nextJob.errorMessage ?? "Preprocessing failed.",
+          kind: "error",
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Preprocessing failed.";
+      await loadAnalysisJob(activeSession.id);
+      showToast({ message, kind: "error" });
+    } finally {
+      setIsPreprocessing(false);
+    }
+  }
+
   const canStart =
-    recorderState === "idle" ||
-    recorderState === "ready" ||
-    recorderState === "failed";
+    !isPreprocessing &&
+    (recorderState === "idle" ||
+      recorderState === "ready" ||
+      recorderState === "failed");
   const isBusy =
+    isPreprocessing ||
     recorderState === "requesting_permission" ||
     recorderState === "preparing" ||
     recorderState === "stopping" ||
@@ -544,9 +601,11 @@ export default function RecordScreen() {
 
           {isBusy && (
             <Text style={styles.processLabel}>
-              {recorderState === "validating"
-                ? "Checking recording..."
-                : "Preparing recorder..."}
+              {isPreprocessing
+                ? "Processing audio..."
+                : recorderState === "validating"
+                  ? "Checking recording..."
+                  : "Preparing recorder..."}
             </Text>
           )}
 
@@ -560,8 +619,11 @@ export default function RecordScreen() {
               <Pressable
                 style={({ pressed }) => [
                   styles.secondaryButton,
-                  { opacity: pressed ? 0.85 : 1 },
+                  {
+                    opacity: isPreprocessing ? 0.45 : pressed ? 0.85 : 1,
+                  },
                 ]}
+                disabled={isPreprocessing}
                 onPress={togglePlayback}
               >
                 <Text style={styles.secondaryButtonText}>
@@ -572,6 +634,46 @@ export default function RecordScreen() {
                       : "Play Recording"}
                 </Text>
               </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  styles.processingButton,
+                  {
+                    opacity: isPreprocessing ? 0.45 : pressed ? 0.85 : 1,
+                  },
+                ]}
+                disabled={isPreprocessing}
+                onPress={processRecording}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {analysisJob?.status === "failed"
+                    ? "Retry Processing"
+                    : analysisJob?.status === "preprocessed"
+                      ? "Process Again"
+                      : "Process Recording"}
+                </Text>
+              </Pressable>
+              {analysisJob && (
+                <View style={styles.analysisMeta}>
+                  <Text style={styles.analysisStatus}>
+                    {analysisJob.status.toUpperCase()}
+                  </Text>
+                  {analysisJob.status === "preprocessed" && (
+                    <Text style={styles.analysisText}>
+                      {analysisJob.processedSampleRate} Hz mono -{" "}
+                      {Math.round(
+                        (analysisJob.processedFileSizeBytes ?? 0) / 1024,
+                      )}{" "}
+                      KB
+                    </Text>
+                  )}
+                  {analysisJob.status === "failed" && (
+                    <Text style={styles.analysisError}>
+                      {analysisJob.errorMessage}
+                    </Text>
+                  )}
+                </View>
+              )}
             </View>
           )}
 
@@ -721,6 +823,31 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     marginTop: 4,
     marginBottom: 14,
+  },
+  processingButton: {
+    marginTop: 12,
+  },
+  analysisMeta: {
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+    marginTop: 14,
+    paddingTop: 14,
+  },
+  analysisStatus: {
+    fontSize: 11,
+    color: colors.accent,
+    fontFamily: "monospace",
+    marginBottom: 6,
+  },
+  analysisText: {
+    fontSize: 12,
+    color: colors.white45,
+    fontFamily: "monospace",
+  },
+  analysisError: {
+    fontSize: 12,
+    color: colors.danger,
+    lineHeight: 18,
   },
   limitText: {
     fontSize: 11,

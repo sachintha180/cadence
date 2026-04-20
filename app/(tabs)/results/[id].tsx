@@ -6,8 +6,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import type { RecordingSession } from "@/constants/types";
+import type { AnalysisJob, RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
 import { getRecordingSessionAsync } from "@/services/recordingDb";
 
 export default function ResultsScreen() {
@@ -15,6 +16,7 @@ export default function ResultsScreen() {
   const { showToast } = useToast();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [session, setSession] = useState<RecordingSession | null>(null);
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,8 +26,12 @@ export default function ResultsScreen() {
       try {
         setLoading(true);
         const nextSession = id ? await getRecordingSessionAsync(id) : null;
+        const nextAnalysisJob = id
+          ? await getAnalysisJobForRecordingAsync(id)
+          : null;
         if (!cancelled) {
           setSession(nextSession);
+          setAnalysisJob(nextAnalysisJob);
         }
       } catch (error) {
         const message =
@@ -93,16 +99,37 @@ export default function ResultsScreen() {
           <MaterialCommunityIcons
             name="chart-timeline-variant"
             size={36}
-            color={colors.white30}
+            color={
+              analysisJob?.status === "preprocessed"
+                ? colors.statusGood
+                : colors.white30
+            }
           />
-          <Text style={styles.cardTitle}>Analysis not run yet</Text>
+          <Text style={styles.cardTitle}>
+            {analysisJob?.status === "preprocessed"
+              ? "Ready for model inference"
+              : analysisJob?.status === "failed"
+                ? "Preprocessing failed"
+                : analysisJob?.status === "preprocessing"
+                  ? "Preprocessing audio"
+                  : "Analysis not run yet"}
+          </Text>
           <Text style={styles.cardBody}>
-            This recording is saved locally and ready for the preprocessing
-            pipeline.
+            {analysisJob?.status === "preprocessed"
+              ? "This recording has a 16 kHz mono WAV artifact ready for Wav2Vec2."
+              : analysisJob?.status === "failed"
+                ? analysisJob.errorMessage
+                : "This recording is saved locally and ready for the preprocessing pipeline."}
           </Text>
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>STATUS</Text>
             <Text style={styles.metaValue}>{session.status.toUpperCase()}</Text>
+          </View>
+          <View style={styles.metaRow}>
+            <Text style={styles.metaLabel}>PREPROCESSING</Text>
+            <Text style={styles.metaValue}>
+              {analysisJob ? analysisJob.status.toUpperCase() : "NOT STARTED"}
+            </Text>
           </View>
           <View style={styles.metaRow}>
             <Text style={styles.metaLabel}>FILE SIZE</Text>
@@ -112,6 +139,32 @@ export default function ResultsScreen() {
                 : `${Math.round(session.fileSizeBytes / 1024)} KB`}
             </Text>
           </View>
+          {analysisJob?.status === "preprocessed" && (
+            <>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>PROCESSED</Text>
+                <Text style={styles.metaValue}>
+                  {Math.round(
+                    (analysisJob.processedFileSizeBytes ?? 0) / 1024,
+                  )}{" "}
+                  KB
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>FORMAT</Text>
+                <Text style={styles.metaValue}>
+                  {analysisJob.processedSampleRate} Hz /{" "}
+                  {analysisJob.processedChannelCount} ch
+                </Text>
+              </View>
+              <View style={styles.metaRow}>
+                <Text style={styles.metaLabel}>FRAMES</Text>
+                <Text style={styles.metaValue}>
+                  {analysisJob.processedFrameCount}
+                </Text>
+              </View>
+            </>
+          )}
         </View>
       </View>
     </View>
