@@ -3,10 +3,11 @@ import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
 import { router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import colors from "../../constants/colors";
-import { formatDate } from "../../constants/helpers";
-import { SESSIONS } from "../../constants/sessions";
-import SessionCard from "../../components/SessionCard";
+
+import colors from "@/constants/colors";
+import { formatDate } from "@/constants/helpers";
+import { SESSIONS } from "@/constants/sessions";
+import SessionCard from "@/components/SessionCard";
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
@@ -21,11 +22,14 @@ export default function HomeScreen() {
       >
         {/* Hero Section */}
         <View style={styles.hero}>
+          {/* Header Text */}
           <Text style={styles.wordmark}>CADENCE</Text>
           <Text style={styles.greeting}>{"Good morning,\nMr Sachintha."}</Text>
           <Text style={styles.heraMeta}>
-            3 sessions analysed · Last on {formatDate("2025-03-03")}
+            3 sessions analysed - Last on {formatDate("2025-03-03")}
           </Text>
+
+          {/* Record Button */}
           <Pressable
             style={({ pressed }) => [
               styles.ctaButton,
@@ -44,6 +48,7 @@ export default function HomeScreen() {
 
         {/* Recent Sessions */}
         <View style={styles.section}>
+          {/* Header */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent Sessions</Text>
             <Pressable
@@ -60,6 +65,8 @@ export default function HomeScreen() {
               </View>
             </Pressable>
           </View>
+
+          {/* Recents List */}
           <View style={styles.sessionList}>
             {SESSIONS.slice(0, 2).map((session) => (
               <SessionCard
