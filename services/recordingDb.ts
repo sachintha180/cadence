@@ -49,6 +49,28 @@ export async function getRecordingDbAsync() {
           error_message TEXT,
           updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS analysis_jobs (
+          id TEXT PRIMARY KEY NOT NULL,
+          recording_session_id TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL,
+          processed_audio_path TEXT,
+          processed_sample_rate INTEGER,
+          processed_channel_count INTEGER,
+          processed_duration_ms INTEGER,
+          processed_frame_count INTEGER,
+          processed_file_size_bytes INTEGER,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (recording_session_id)
+            REFERENCES recording_sessions(id)
+            ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_jobs_recording_session_id
+          ON analysis_jobs(recording_session_id);
       `);
 
       return db;
