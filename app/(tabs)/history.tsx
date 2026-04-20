@@ -1,5 +1,12 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
+import {
+  Alert,
+  View,
+  Text,
+  ScrollView,
+  Pressable,
+  StyleSheet,
+} from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -10,6 +17,7 @@ import colors from "@/constants/colors";
 import type { RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
+import { deleteRecordingAsync } from "@/services/recordingDelete";
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -48,6 +56,37 @@ export default function HistoryScreen() {
   useFocusEffect(loadSessions);
 
   const total = sessions.length;
+
+  function confirmDeleteRecording(session: RecordingSession) {
+    Alert.alert(
+      "Delete recording?",
+      "This will permanently remove the audio file from this device.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            deleteRecording(session);
+          },
+        },
+      ],
+    );
+  }
+
+  async function deleteRecording(session: RecordingSession) {
+    try {
+      await deleteRecordingAsync(session);
+      setSessions((current) =>
+        current.filter((currentSession) => currentSession.id !== session.id),
+      );
+      showToast({ message: "Recording deleted.", kind: "success" });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not delete recording.";
+      showToast({ message, kind: "error" });
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -112,11 +151,30 @@ export default function HistoryScreen() {
                     </View>
                   </View>
 
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={20}
-                    color={colors.white20}
-                  />
+                  <View style={styles.actions}>
+                    <Pressable
+                      hitSlop={10}
+                      style={({ pressed }) => [
+                        styles.deleteButton,
+                        { opacity: pressed ? 0.65 : 1 },
+                      ]}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        confirmDeleteRecording(session);
+                      }}
+                    >
+                      <MaterialCommunityIcons
+                        name="trash-can-outline"
+                        size={20}
+                        color={colors.danger}
+                      />
+                    </Pressable>
+                    <MaterialCommunityIcons
+                      name="chevron-right"
+                      size={20}
+                      color={colors.white20}
+                    />
+                  </View>
                 </View>
               </Pressable>
             ))}
@@ -131,8 +189,6 @@ function statusColor(status: RecordingSession["status"]) {
   switch (status) {
     case "ready":
       return colors.statusGood;
-    case "failed":
-      return colors.danger;
     case "completed":
       return colors.accent;
     default:
@@ -216,6 +272,21 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: "wrap",
     marginTop: 10,
+  },
+  actions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  deleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dangerBg,
+    borderWidth: 1,
+    borderColor: colors.dangerBorder,
   },
   emptyCard: {
     marginHorizontal: 24,

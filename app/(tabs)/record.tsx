@@ -40,6 +40,7 @@ import {
   persistRecordingAsync,
   validateRecordingFileAsync,
 } from "@/services/recordingFiles";
+import { discardRecordingSessionAsync } from "@/services/recordingDelete";
 import { logRecorderEvent } from "@/services/recordingLog";
 
 export default function RecordScreen() {
@@ -52,23 +53,70 @@ export default function RecordScreen() {
   const [activeSession, setActiveSession] = useState<RecordingSession | null>(
     null,
   );
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackState, setPlaybackState] = useState<
+    "idle" | "playing" | "paused"
+  >("idle");
 
   const playerRef = useRef<AudioPlayer | null>(null);
+  const playbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stateRef = useRef<RecorderState>("idle");
   const stoppingRef = useRef(false);
+  const activeSessionRef = useRef<RecordingSession | null>(null);
 
   useEffect(() => {
     stateRef.current = recorderState;
   }, [recorderState]);
 
+  useEffect(() => {
+    activeSessionRef.current = activeSession;
+  }, [activeSession]);
+
   const stopPlayback = useCallback(async () => {
+    if (playbackPollRef.current) {
+      clearInterval(playbackPollRef.current);
+      playbackPollRef.current = null;
+    }
+
     if (playerRef.current) {
       playerRef.current.remove();
       playerRef.current = null;
     }
-    setIsPlaying(false);
+    setPlaybackState("idle");
   }, []);
+
+  function startPlaybackPolling() {
+    if (playbackPollRef.current) {
+      clearInterval(playbackPollRef.current);
+    }
+
+    playbackPollRef.current = setInterval(() => {
+      const player = playerRef.current;
+
+      if (!player) {
+        return;
+      }
+
+      if (player.currentStatus.didJustFinish) {
+        stopPlayback();
+      }
+    }, 500);
+  }
+
+  async function discardAfterFailure(
+    session: RecordingSession,
+    audioPath?: string | null,
+  ) {
+    try {
+      await discardRecordingSessionAsync(session, audioPath ?? session.audioPath);
+    } catch (error) {
+      logRecorderEvent("recording_failed", {
+        sessionId: session.id,
+        details: {
+          cleanupError: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
 
   const finishRecording = useCallback(
     async (autoStopped = false) => {
@@ -99,65 +147,69 @@ export default function RecordScreen() {
         );
 
         setRecorderState("validating");
-        const audioPath = await persistRecordingAsync(sourceUri, session.id);
-        await updateRecordingSessionAsync(session.id, {
-          audioPath,
-          durationMs,
-          status: "stopped",
-        });
-        const validation = await validateRecordingFileAsync(
-          audioPath,
-          durationMs,
-        );
+        let audioPath: string | null = null;
 
-        const readySession: RecordingSession = {
-          ...session,
-          audioPath,
-          durationMs,
-          status: "ready",
-          fileSizeBytes: validation.fileSizeBytes,
-          errorMessage: null,
-          updatedAt: new Date().toISOString(),
-        };
+        try {
+          audioPath = await persistRecordingAsync(sourceUri, session.id);
+          await updateRecordingSessionAsync(session.id, {
+            audioPath,
+            durationMs,
+            status: "stopped",
+          });
+          const validation = await validateRecordingFileAsync(
+            audioPath,
+            durationMs,
+          );
 
-        await updateRecordingSessionAsync(session.id, {
-          audioPath,
-          durationMs,
-          status: "ready",
-          fileSizeBytes: validation.fileSizeBytes,
-          errorMessage: null,
-        });
+          const readySession: RecordingSession = {
+            ...session,
+            audioPath,
+            durationMs,
+            status: "ready",
+            fileSizeBytes: validation.fileSizeBytes,
+            errorMessage: null,
+            updatedAt: new Date().toISOString(),
+          };
 
-        logRecorderEvent("recording_validated", {
-          sessionId: session.id,
-          details: { durationMs, fileSizeBytes: validation.fileSizeBytes },
-        });
+          await updateRecordingSessionAsync(session.id, {
+            audioPath,
+            durationMs,
+            status: "ready",
+            fileSizeBytes: validation.fileSizeBytes,
+            errorMessage: null,
+          });
 
-        setActiveSession(readySession);
-        setElapsedMs(durationMs);
-        setRecorderState("ready");
-        showToast({
-          message: autoStopped
-            ? "Recording stopped at 90 minutes."
-            : "Recording saved.",
-          kind: "success",
-        });
+          logRecorderEvent("recording_validated", {
+            sessionId: session.id,
+            details: { durationMs, fileSizeBytes: validation.fileSizeBytes },
+          });
+
+          setActiveSession(readySession);
+          setElapsedMs(durationMs);
+          setRecorderState("ready");
+          showToast({
+            message: autoStopped
+              ? "Recording stopped at 90 minutes."
+              : "Recording saved.",
+            kind: "success",
+          });
+        } catch (error) {
+          await discardAfterFailure(session, audioPath);
+          throw error;
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Recording failed.";
 
         if (session) {
-          await updateRecordingSessionAsync(session.id, {
-            durationMs: elapsedMs,
-            status: "failed",
-            errorMessage: message,
-          });
+          await discardAfterFailure(session);
           logRecorderEvent("recording_failed", {
             sessionId: session.id,
             details: { message },
           });
         }
 
+        setActiveSession(null);
         setRecorderState("failed");
         showToast({ message, kind: "error" });
       } finally {
@@ -264,6 +316,8 @@ export default function RecordScreen() {
   }
 
   async function beginRecording() {
+    let createdSession: RecordingSession | null = null;
+
     try {
       await stopPlayback();
       const hasPermission = await requestRecordingPermission();
@@ -299,6 +353,7 @@ export default function RecordScreen() {
       };
 
       await createRecordingSessionAsync(session);
+      createdSession = session;
 
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
@@ -310,6 +365,13 @@ export default function RecordScreen() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Could not start recording.";
+      const session = activeSessionRef.current ?? createdSession;
+
+      if (session) {
+        await discardAfterFailure(session);
+        setActiveSession(null);
+      }
+
       setRecorderState("failed");
       showToast({ message, kind: "error" });
       logRecorderEvent("recording_failed", { details: { message } });
@@ -342,8 +404,16 @@ export default function RecordScreen() {
     }
 
     try {
-      if (isPlaying) {
-        await stopPlayback();
+      if (playbackState === "playing" && playerRef.current) {
+        playerRef.current.pause();
+        setPlaybackState("paused");
+        return;
+      }
+
+      if (playbackState === "paused" && playerRef.current) {
+        playerRef.current.play();
+        setPlaybackState("playing");
+        startPlaybackPolling();
         return;
       }
 
@@ -351,7 +421,8 @@ export default function RecordScreen() {
       player.play();
 
       playerRef.current = player;
-      setIsPlaying(true);
+      setPlaybackState("playing");
+      startPlaybackPolling();
       logRecorderEvent("playback_started", { sessionId: activeSession.id });
     } catch (error) {
       const message =
@@ -494,7 +565,11 @@ export default function RecordScreen() {
                 onPress={togglePlayback}
               >
                 <Text style={styles.secondaryButtonText}>
-                  {isPlaying ? "Stop Playback" : "Play Recording"}
+                  {playbackState === "playing"
+                    ? "Pause Recording"
+                    : playbackState === "paused"
+                      ? "Resume Recording"
+                      : "Play Recording"}
                 </Text>
               </Pressable>
             </View>
