@@ -14,8 +14,14 @@ export type RecorderEventName =
   | "interruption_pause_failed_saved"
   | "recording_delete_requested"
   | "recording_delete_completed"
+  | "recording_delete_file_cleanup_failed"
+  | "recording_delete_preprocessed_cleanup_failed"
+  | "recording_delete_db_cleanup_failed"
   | "recording_discard_started"
-  | "recording_discard_completed";
+  | "recording_discard_completed"
+  | "recording_discard_file_cleanup_failed"
+  | "recording_discard_preprocessed_cleanup_failed"
+  | "recording_discard_db_cleanup_failed";
 
 export type RecorderEventLog = {
   timestamp: string;

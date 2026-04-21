@@ -510,6 +510,7 @@ export default function RecordScreen() {
         model,
         chunks,
         activeSession.id,
+        activeSession.durationMs,
         indicatorExtractionCallback,
       );
       setInferenceResult(nextInferenceResult);

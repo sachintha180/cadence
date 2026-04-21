@@ -4,12 +4,16 @@ export type DbEventName =
   | "recording_session_updated"
   | "recording_session_update_skipped"
   | "recording_session_deleted"
+  | "recording_rows_cleanup_started"
+  | "recording_rows_cleanup_completed"
+  | "recording_rows_cleanup_failed"
   | "recording_sessions_listed"
   | "analysis_job_created"
   | "analysis_job_updated"
   | "analysis_job_deleted"
   | "indicator_chunk_saved"
   | "indicator_session_saved"
+  | "indicator_rows_deleted"
   | "indicator_rows_loaded";
 
 export type DbEventLog = {

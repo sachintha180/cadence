@@ -122,7 +122,6 @@ export default function ImportScreen() {
       logImportEvent("validation_completed", {
         sessionId,
         details: {
-          durationMs: validation.durationMs,
           fileSizeBytes: validation.fileSizeBytes,
         },
       });
@@ -131,7 +130,7 @@ export default function ImportScreen() {
         id: sessionId,
         createdAt,
         audioPath: copiedPath,
-        durationMs: validation.durationMs,
+        durationMs: 0,
         status: "ready",
         fileSizeBytes: validation.fileSizeBytes,
         title: displayName ?? fallbackTitle(createdAt),
@@ -174,9 +173,15 @@ export default function ImportScreen() {
         throw new Error("No audio chunks were created for inference.");
       }
 
+      const processedDurationMs = job.processedDurationMs ?? session.durationMs;
+
+      if (processedDurationMs <= 0) {
+        throw new Error("Preprocessing did not return a valid duration.");
+      }
+
       logImportEvent("preprocessing_completed", {
         sessionId: session.id,
-        details: { chunks: chunks.length },
+        details: { chunks: chunks.length, durationMs: processedDurationMs },
       });
       setStatusLabel("Running inference and saving indicators...");
       logImportEvent("inference_started", {
@@ -187,6 +192,7 @@ export default function ImportScreen() {
         model,
         chunks,
         session.id,
+        processedDurationMs,
         indicatorExtractionCallback,
         (chunkIndex, total) => {
           setStatusLabel(`Running inference ${chunkIndex}/${total} chunks...`);

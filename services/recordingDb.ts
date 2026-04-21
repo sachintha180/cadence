@@ -251,3 +251,37 @@ export async function deleteRecordingSessionAsync(id: string) {
   await db.runAsync("DELETE FROM recording_sessions WHERE id = ?", id);
   logDbEvent("recording_session_deleted", { sessionId: id });
 }
+
+export async function deleteRecordingRowsAsync(id: string) {
+  const db = await getRecordingDbAsync();
+
+  logDbEvent("recording_rows_cleanup_started", { sessionId: id });
+
+  try {
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
+        "DELETE FROM chunk_indicators WHERE session_id = ?",
+        id,
+      );
+      await db.runAsync(
+        "DELETE FROM session_indicators WHERE session_id = ?",
+        id,
+      );
+      await db.runAsync(
+        "DELETE FROM analysis_jobs WHERE recording_session_id = ?",
+        id,
+      );
+      await db.runAsync("DELETE FROM recording_sessions WHERE id = ?", id);
+    });
+
+    logDbEvent("recording_rows_cleanup_completed", { sessionId: id });
+  } catch (error) {
+    logDbEvent("recording_rows_cleanup_failed", {
+      sessionId: id,
+      details: {
+        message: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
+  }
+}

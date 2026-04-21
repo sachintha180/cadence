@@ -233,3 +233,22 @@ export async function getIndicatorRowsForSession(
     throw error;
   }
 }
+
+export async function deleteIndicatorsForSession(
+  sessionId: string,
+): Promise<void> {
+  const db = await getRecordingDbAsync();
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "DELETE FROM chunk_indicators WHERE session_id = ?",
+      sessionId,
+    );
+    await db.runAsync(
+      "DELETE FROM session_indicators WHERE session_id = ?",
+      sessionId,
+    );
+  });
+
+  logDbEvent("indicator_rows_deleted", { sessionId });
+}
