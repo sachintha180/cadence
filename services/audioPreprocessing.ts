@@ -3,6 +3,7 @@ import * as FileSystem from "expo-file-system/legacy";
 
 import {
   PREPROCESSED_RECORDINGS_DIR_NAME,
+  WAV2VEC_CHUNK_LENGTH,
   WAV2VEC_SAMPLE_RATE,
 } from "@/constants/recording";
 import type { AnalysisJob, PreprocessedAudioMetadata } from "@/constants/types";
@@ -12,6 +13,11 @@ import {
 } from "@/services/analysisDb";
 import { logAnalysisEvent } from "@/services/analysisLog";
 import { getRecordingSessionAsync } from "@/services/recordingDb";
+
+export type PreprocessForInferenceResult = {
+  job: AnalysisJob;
+  chunks: Float32Array[];
+};
 
 function getPreprocessedDirectory(): string {
   if (!FileSystem.documentDirectory) {
@@ -53,6 +59,29 @@ function downmixToMono(
   }
 
   return mono;
+}
+
+function chunkSamples(samples: Float32Array) {
+  const chunks: Float32Array[] = [];
+  const chunkCount = Math.ceil(samples.length / WAV2VEC_CHUNK_LENGTH);
+  const finalChunkSamples =
+    samples.length === 0 ? 0 : samples.length % WAV2VEC_CHUNK_LENGTH;
+  const finalPaddingSamples =
+    finalChunkSamples === 0 ? 0 : WAV2VEC_CHUNK_LENGTH - finalChunkSamples;
+
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * WAV2VEC_CHUNK_LENGTH;
+    const end = Math.min(start + WAV2VEC_CHUNK_LENGTH, samples.length);
+    const chunk = new Float32Array(WAV2VEC_CHUNK_LENGTH);
+    chunk.set(samples.subarray(start, end));
+    chunks.push(chunk);
+  }
+
+  console.log(
+    `[Cadence] Audio chunking complete: ${chunks.length} chunks | finalPaddingSamples=${finalPaddingSamples}`,
+  );
+
+  return chunks;
 }
 
 function writeAscii(view: DataView, offset: number, value: string) {
@@ -125,13 +154,20 @@ export async function deletePreprocessedRecordingAsync(
 export async function preprocessRecordingAsync(
   recordingSessionId: string,
 ): Promise<AnalysisJob> {
+  const result = await preprocessRecordingForInferenceAsync(recordingSessionId);
+  return result.job;
+}
+
+export async function preprocessRecordingForInferenceAsync(
+  recordingSessionId: string,
+): Promise<PreprocessForInferenceResult> {
   const session = await getRecordingSessionAsync(recordingSessionId);
 
   if (!session) {
     throw new Error("Recording not found.");
   }
 
-  if (session.status !== "ready") {
+  if (session.status !== "ready" && session.status !== "completed") {
     throw new Error("Recording is not ready for preprocessing.");
   }
 
@@ -162,6 +198,7 @@ export async function preprocessRecordingAsync(
       WAV2VEC_SAMPLE_RATE,
     );
     const monoSamples = downmixToMono(audioBuffer);
+    const chunks = chunkSamples(monoSamples);
     const wavBytes = encodePcm16Wav(monoSamples, WAV2VEC_SAMPLE_RATE);
     const outputPath = getPreprocessedRecordingPath(recordingSessionId);
 
@@ -203,7 +240,7 @@ export async function preprocessRecordingAsync(
       },
     });
 
-    return nextJob;
+    return { job: nextJob, chunks };
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Preprocessing failed.";
@@ -218,6 +255,6 @@ export async function preprocessRecordingAsync(
       details: { message },
     });
 
-    return failedJob;
+    return { job: failedJob, chunks: [] };
   }
 }
