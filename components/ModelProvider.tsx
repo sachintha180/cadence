@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 
-import { loadStubModel, type TFLiteModel } from "@/src/ml/modelLoader";
+import { loadModel, type TFLiteModel } from "@/src/ml/modelLoader";
 
 type ModelState = "loading" | "loaded" | "error";
 
@@ -35,7 +35,7 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
     if (!modelPromiseRef.current) {
       setState("loading");
       setError(null);
-      modelPromiseRef.current = loadStubModel();
+      modelPromiseRef.current = loadModel();
     }
 
     try {
