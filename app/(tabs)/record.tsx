@@ -40,8 +40,8 @@ import {
   updateAnalysisJobAsync,
 } from "@/services/analysisDb";
 import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
+import { indicatorExtractionCallback } from "@/src/ml/indicatorExtractor";
 import { runSessionInference } from "@/src/ml/inferenceEngine";
-import { placeholderExtractionCallback } from "@/src/ml/placeholderExtractor";
 import type { SessionInferenceResult } from "@/src/types/indicators";
 import {
   createRecordingSessionAsync,
@@ -510,7 +510,7 @@ export default function RecordScreen() {
         model,
         chunks,
         activeSession.id,
-        placeholderExtractionCallback,
+        indicatorExtractionCallback,
       );
       setInferenceResult(nextInferenceResult);
 
