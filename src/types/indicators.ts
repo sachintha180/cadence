@@ -133,6 +133,7 @@ export type IndicatorExtractionCallback = (
   chunkIndex: number,
   pcmChunk: Float32Array,
   embeddings: Float32Array | null,
+  trueChunkDurationMs: number,
 ) => ChunkIndicators;
 
 export type ChunkInferenceResult = {
