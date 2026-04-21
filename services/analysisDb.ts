@@ -1,6 +1,7 @@
 import * as Crypto from "expo-crypto";
 
 import type { AnalysisJob, AnalysisJobStatus } from "@/constants/types";
+import { logDbEvent } from "@/services/dbLog";
 import { getRecordingDbAsync } from "@/services/recordingDb";
 
 type AnalysisJobRow = {
@@ -119,6 +120,10 @@ export async function getOrCreateAnalysisJobAsync(recordingSessionId: string) {
     job.createdAt,
     job.updatedAt,
   );
+  logDbEvent("analysis_job_created", {
+    sessionId: recordingSessionId,
+    details: { status: job.status },
+  });
 
   return job;
 }
@@ -160,6 +165,14 @@ export async function updateAnalysisJobAsync(
     next.updatedAt,
     recordingSessionId,
   );
+  logDbEvent("analysis_job_updated", {
+    sessionId: recordingSessionId,
+    details: {
+      status: next.status,
+      attemptCount: next.attemptCount,
+      hasError: Boolean(next.errorMessage),
+    },
+  });
 
   return next;
 }
@@ -172,4 +185,5 @@ export async function deleteAnalysisJobForRecordingAsync(
     "DELETE FROM analysis_jobs WHERE recording_session_id = ?",
     recordingSessionId,
   );
+  logDbEvent("analysis_job_deleted", { sessionId: recordingSessionId });
 }
