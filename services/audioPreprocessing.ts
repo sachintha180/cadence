@@ -155,13 +155,6 @@ export async function deletePreprocessedRecordingAsync(
   await FileSystem.deleteAsync(path, { idempotent: true });
 }
 
-export async function preprocessRecordingAsync(
-  recordingSessionId: string,
-): Promise<AnalysisJob> {
-  const result = await preprocessRecordingForInferenceAsync(recordingSessionId);
-  return result.job;
-}
-
 export async function preprocessRecordingForInferenceAsync(
   recordingSessionId: string,
 ): Promise<PreprocessForInferenceResult> {
