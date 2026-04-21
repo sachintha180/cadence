@@ -2,6 +2,7 @@ import type {
   ChunkIndicators,
   SessionIndicators,
 } from "@/src/types/indicators";
+import { logDbEvent } from "@/services/dbLog";
 import { getRecordingDbAsync } from "@/services/recordingDb";
 
 export type ChunkIndicatorRow = {
@@ -111,6 +112,14 @@ export async function saveChunkIndicators(
       null,
       null,
     );
+    logDbEvent("indicator_chunk_saved", {
+      sessionId,
+      details: {
+        chunkIndex: chunk.chunkIndex,
+        meanRms: chunk.energy.meanRms,
+        speechRatio: chunk.speechActivity.chunkSpeechRatio,
+      },
+    });
   } catch (error) {
     console.error("[Cadence] Failed to save chunk indicators:", error);
     throw error;
@@ -176,6 +185,15 @@ export async function saveSessionIndicators(
         indicators.sessionId,
       );
     });
+    logDbEvent("indicator_session_saved", {
+      sessionId: indicators.sessionId,
+      details: {
+        totalChunks: indicators.totalChunks,
+        sessionDurationMs: indicators.sessionDurationMs,
+        sessionSpeechRatio:
+          indicators.speechActivity.teacherSpeechActivityRatio,
+      },
+    });
   } catch (error) {
     console.error("[Cadence] Failed to save session indicators:", error);
     throw error;
@@ -197,6 +215,14 @@ export async function getIndicatorRowsForSession(
        ORDER BY chunk_index ASC`,
       sessionId,
     );
+
+    logDbEvent("indicator_rows_loaded", {
+      sessionId,
+      details: {
+        hasSessionIndicators: Boolean(sessionIndicators),
+        chunkCount: chunkIndicators.length,
+      },
+    });
 
     return {
       sessionIndicators: sessionIndicators ?? null,
