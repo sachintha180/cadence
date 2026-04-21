@@ -38,6 +38,7 @@ export async function getRecordingDbAsync() {
     dbPromise = SQLite.openDatabaseAsync("cadence.db").then(async (db) => {
       await db.execAsync(`
         PRAGMA journal_mode = WAL;
+        PRAGMA foreign_keys = ON;
         CREATE TABLE IF NOT EXISTS recording_sessions (
           id TEXT PRIMARY KEY NOT NULL,
           created_at TEXT NOT NULL,
@@ -71,6 +72,50 @@ export async function getRecordingDbAsync() {
 
         CREATE INDEX IF NOT EXISTS idx_analysis_jobs_recording_session_id
           ON analysis_jobs(recording_session_id);
+
+        CREATE TABLE IF NOT EXISTS chunk_indicators (
+          session_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          chunk_start_ms INTEGER NOT NULL,
+          chunk_duration_ms INTEGER NOT NULL,
+          mean_rms REAL NOT NULL,
+          std_rms REAL NOT NULL,
+          min_rms REAL NOT NULL,
+          max_rms REAL NOT NULL,
+          pause_count INTEGER NOT NULL,
+          total_pause_duration_ms INTEGER NOT NULL,
+          longest_pause_ms INTEGER NOT NULL,
+          speech_ratio REAL NOT NULL,
+          speech_frame_count INTEGER NOT NULL,
+          silence_frame_count INTEGER NOT NULL,
+          chunk_speech_ratio REAL NOT NULL,
+          noise_floor REAL,
+          silence_threshold REAL,
+          PRIMARY KEY (session_id, chunk_index),
+          FOREIGN KEY (session_id)
+            REFERENCES recording_sessions(id)
+            ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS session_indicators (
+          session_id TEXT PRIMARY KEY,
+          total_chunks INTEGER NOT NULL,
+          session_duration_ms INTEGER NOT NULL,
+          computed_at_ms INTEGER NOT NULL,
+          mean_rms_mean REAL NOT NULL,
+          mean_rms_std REAL NOT NULL,
+          mean_rms_min REAL NOT NULL,
+          mean_rms_max REAL NOT NULL,
+          total_pause_count INTEGER NOT NULL,
+          total_pause_duration_ms INTEGER NOT NULL,
+          longest_pause_ms INTEGER NOT NULL,
+          mean_pauses_per_chunk REAL NOT NULL,
+          session_speech_ratio REAL NOT NULL,
+          mean_chunk_speech_ratio REAL NOT NULL,
+          FOREIGN KEY (session_id)
+            REFERENCES recording_sessions(id)
+            ON DELETE CASCADE
+        );
       `);
 
       return db;
