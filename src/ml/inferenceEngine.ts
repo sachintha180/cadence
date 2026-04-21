@@ -1,29 +1,18 @@
+import { VAD_CONFIG } from "@/src/constants/vadConfig";
 import type { TFLiteModel } from "@/src/ml/modelLoader";
+import type {
+  ChunkIndicators,
+  IndicatorExtractionCallback,
+  SessionEnergyAggregates,
+  SessionIndicators,
+  SessionInferenceResult,
+  SessionPauseAggregates,
+  SessionPitchAggregates,
+  SessionSpeechActivityAggregates,
+} from "@/src/types/indicators";
 
 const EXPECTED_CHUNK_LENGTH = 160000;
-
-/**
- * @deprecated Phase 4B.1 introduces the stream-and-discard result type in
- * src/types/indicators.ts. This Phase 3 shape is kept until the 4B.2
- * inference refactor removes stored embeddings from the runtime pipeline.
- */
-export interface ChunkInferenceResult {
-  chunkIndex: number;
-  inferenceTimeMs: number;
-  embeddings: Float32Array;
-}
-
-/**
- * @deprecated Phase 4B.1 introduces the stream-and-discard result type in
- * src/types/indicators.ts. This Phase 3 shape is kept until the 4B.2
- * inference refactor removes stored embeddings from the runtime pipeline.
- */
-export interface SessionInferenceResult {
-  totalChunks: number;
-  totalInferenceTimeMs: number;
-  averageChunkTimeMs: number;
-  results: ChunkInferenceResult[];
-}
+const CHUNK_DURATION_MS = 10000;
 
 function toExactArrayBuffer(chunk: Float32Array): ArrayBuffer {
   const start = chunk.byteOffset;
@@ -38,11 +27,150 @@ function toExactArrayBuffer(chunk: Float32Array): ArrayBuffer {
   return bytes.buffer;
 }
 
+function mean(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const average = mean(values);
+  const variance =
+    values.reduce((total, value) => total + (value - average) ** 2, 0) /
+    values.length;
+  return Math.sqrt(variance);
+}
+
+function buildPauseAggregates(
+  chunkIndicators: ChunkIndicators[],
+  sessionDurationMs: number,
+): SessionPauseAggregates {
+  const totalPauses = chunkIndicators.reduce(
+    (total, chunk) => total + chunk.pause.pauseCount,
+    0,
+  );
+  const totalPauseDurationMs = chunkIndicators.reduce(
+    (total, chunk) => total + chunk.pause.totalPauseDurationMs,
+    0,
+  );
+
+  return {
+    totalPauses,
+    totalPauseDurationMs,
+    pausesPerMinute:
+      sessionDurationMs > 0 ? totalPauses / (sessionDurationMs / 60000) : 0,
+    averagePauseDurationMs:
+      totalPauses > 0 ? totalPauseDurationMs / totalPauses : 0,
+    longestPauseMs: Math.max(
+      0,
+      ...chunkIndicators.map((chunk) => chunk.pause.longestPauseMs),
+    ),
+    speechRatioTimeline: chunkIndicators.map(
+      (chunk) => chunk.pause.speechRatio,
+    ),
+  };
+}
+
+function buildEnergyAggregates(
+  chunkIndicators: ChunkIndicators[],
+): SessionEnergyAggregates {
+  const rmsTimeline = chunkIndicators.map((chunk) => chunk.energy.meanRms);
+  const meanRms = mean(rmsTimeline);
+  const rmsStd = standardDeviation(rmsTimeline);
+
+  return {
+    meanRms,
+    rmsCoeffVariation: meanRms > 0 ? rmsStd / meanRms : 0,
+    rmsTimeline,
+    energyDropEvents: rmsTimeline.filter(
+      (value) => value < meanRms * VAD_CONFIG.ENERGY_DROP_THRESHOLD_RATIO,
+    ).length,
+  };
+}
+
+function buildPitchAggregates(
+  chunkIndicators: ChunkIndicators[],
+): SessionPitchAggregates | null {
+  const pitchValues = chunkIndicators
+    .map((chunk) => chunk.pitch?.embeddingVariance)
+    .filter((value): value is number => typeof value === "number");
+
+  if (pitchValues.length === 0) {
+    return null;
+  }
+
+  return {
+    pitchVarianceTimeline: pitchValues,
+    meanPitchVariance: mean(pitchValues),
+    pitchVarianceStd: standardDeviation(pitchValues),
+  };
+}
+
+function buildSpeechActivityAggregates(
+  chunkIndicators: ChunkIndicators[],
+  sessionDurationMs: number,
+): SessionSpeechActivityAggregates {
+  const totalSpeechMs = chunkIndicators.reduce(
+    (total, chunk) =>
+      total +
+      chunk.speechActivity.speechFrameCount * VAD_CONFIG.RMS_FRAME_DURATION_MS,
+    0,
+  );
+  const totalSilenceMs = chunkIndicators.reduce(
+    (total, chunk) =>
+      total +
+      chunk.speechActivity.silenceFrameCount * VAD_CONFIG.RMS_FRAME_DURATION_MS,
+    0,
+  );
+
+  return {
+    totalSpeechMs,
+    totalSilenceMs,
+    teacherSpeechActivityRatio:
+      sessionDurationMs > 0 ? totalSpeechMs / sessionDurationMs : 0,
+  };
+}
+
+function buildSessionIndicators(
+  sessionId: string,
+  chunkIndicators: ChunkIndicators[],
+): SessionIndicators {
+  const sessionDurationMs = chunkIndicators.reduce(
+    (total, chunk) => total + chunk.chunkDurationMs,
+    0,
+  );
+
+  return {
+    sessionId,
+    sessionDurationMs,
+    totalChunks: chunkIndicators.length,
+    computedAtMs: Date.now(),
+    pause: buildPauseAggregates(chunkIndicators, sessionDurationMs),
+    energy: buildEnergyAggregates(chunkIndicators),
+    pitch: buildPitchAggregates(chunkIndicators),
+    speechActivity: buildSpeechActivityAggregates(
+      chunkIndicators,
+      sessionDurationMs,
+    ),
+    chunkIndicators,
+  };
+}
+
 export async function runSessionInference(
   model: TFLiteModel,
   chunks: Float32Array[],
+  sessionId: string,
+  extractionCallback: IndicatorExtractionCallback,
+  onProgress?: (chunkIndex: number, total: number) => void,
 ): Promise<SessionInferenceResult> {
-  const results: ChunkInferenceResult[] = [];
+  const chunkIndicators: ChunkIndicators[] = [];
+  const inferenceTimes: number[] = [];
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
@@ -75,24 +203,32 @@ export async function runSessionInference(
       `[Cadence] Chunk ${index}/${chunks.length}: inference=${inferenceTimeMs}ms | output[0..2]=[${preview}]`,
     );
 
-    results.push({
-      chunkIndex: index,
-      inferenceTimeMs,
-      embeddings,
-    });
+    chunkIndicators.push(extractionCallback(index, chunk, embeddings));
+    inferenceTimes.push(inferenceTimeMs);
+    onProgress?.(index + 1, chunks.length);
   }
 
-  const totalInferenceTimeMs = results.reduce(
-    (total, result) => total + result.inferenceTimeMs,
+  const totalInferenceTimeMs = inferenceTimes.reduce(
+    (total, value) => total + value,
     0,
   );
   const averageChunkTimeMs =
-    results.length > 0 ? totalInferenceTimeMs / results.length : 0;
+    inferenceTimes.length > 0
+      ? totalInferenceTimeMs / inferenceTimes.length
+      : 0;
+  const sessionIndicators = buildSessionIndicators(sessionId, chunkIndicators);
+
+  console.log(
+    `[Cadence] Stream-and-discard complete: ${chunkIndicators.length} chunks | indicators accumulated | peak embedding memory ~1.5MB`,
+  );
 
   return {
+    sessionId,
     totalChunks: chunks.length,
     totalInferenceTimeMs,
     averageChunkTimeMs,
-    results,
+    sessionIndicators,
   };
 }
+
+export { CHUNK_DURATION_MS };

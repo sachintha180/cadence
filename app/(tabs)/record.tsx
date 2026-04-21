@@ -40,10 +40,9 @@ import {
   updateAnalysisJobAsync,
 } from "@/services/analysisDb";
 import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
-import {
-  runSessionInference,
-  type SessionInferenceResult,
-} from "@/src/ml/inferenceEngine";
+import { runSessionInference } from "@/src/ml/inferenceEngine";
+import { placeholderExtractionCallback } from "@/src/ml/placeholderExtractor";
+import type { SessionInferenceResult } from "@/src/types/indicators";
 import {
   createRecordingSessionAsync,
   updateRecordingSessionAsync,
@@ -507,7 +506,12 @@ export default function RecordScreen() {
       }
 
       setProcessingLabel("Running inference...");
-      const nextInferenceResult = await runSessionInference(model, chunks);
+      const nextInferenceResult = await runSessionInference(
+        model,
+        chunks,
+        activeSession.id,
+        placeholderExtractionCallback,
+      );
       setInferenceResult(nextInferenceResult);
 
       console.log(
