@@ -34,6 +34,11 @@
     "web": {
       "favicon": "./assets/images/favicon.png"
     },
-    "plugins": ["expo-router", "expo-asset", "react-native-audio-api"]
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "react-native-audio-api",
+      "react-native-fast-tflite"
+    ]
   }
 }
