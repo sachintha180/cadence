@@ -22,6 +22,17 @@ import {
 } from "@/src/db/indicatorRepository";
 import { getRecordingSessionAsync } from "@/services/recordingDb";
 
+function logResultsEvent(event: string, details?: Record<string, unknown>) {
+  console.log(
+    "[results]",
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+    }),
+  );
+}
+
 type ResultsState = {
   session: RecordingSession | null;
   sessionIndicators: SessionIndicatorRow | null;
@@ -57,6 +68,7 @@ export default function ResultsScreen() {
     async function loadSession() {
       try {
         setLoading(true);
+        logResultsEvent("results_load_started", { sessionId: id });
         const nextSession = id ? await getRecordingSessionAsync(id) : null;
         const indicatorRows = id
           ? await getIndicatorRowsForSession(id)
@@ -68,10 +80,20 @@ export default function ResultsScreen() {
             sessionIndicators: indicatorRows.sessionIndicators,
             chunkIndicators: indicatorRows.chunkIndicators,
           });
+          logResultsEvent("results_load_completed", {
+            sessionId: id,
+            recordingFound: Boolean(nextSession),
+            hasSessionIndicators: Boolean(indicatorRows.sessionIndicators),
+            chunkCount: indicatorRows.chunkIndicators.length,
+            renderMode: indicatorRows.sessionIndicators
+              ? "analysed"
+              : "not_analysed",
+          });
         }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Could not load results.";
+        logResultsEvent("results_load_failed", { sessionId: id, message });
         showToast({ message, kind: "error" });
       } finally {
         if (!cancelled) {
@@ -88,10 +110,7 @@ export default function ResultsScreen() {
   }, [id, showToast]);
 
   const maxChunkRms = useMemo(() => {
-    return Math.max(
-      0,
-      ...state.chunkIndicators.map((chunk) => chunk.mean_rms),
-    );
+    return Math.max(0, ...state.chunkIndicators.map((chunk) => chunk.mean_rms));
   }, [state.chunkIndicators]);
 
   if (loading) {
@@ -175,7 +194,9 @@ export default function ResultsScreen() {
             </View>
             <View style={styles.metaRow}>
               <Text style={styles.metaLabel}>STATUS</Text>
-              <Text style={styles.metaValue}>{session.status.toUpperCase()}</Text>
+              <Text style={styles.metaValue}>
+                {session.status.toUpperCase()}
+              </Text>
             </View>
           </View>
 
