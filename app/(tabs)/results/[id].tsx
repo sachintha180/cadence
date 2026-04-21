@@ -13,8 +13,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import type { RecordingSession } from "@/constants/types";
+import type { AnalysisJob, RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
 import {
   getIndicatorRowsForSession,
   type ChunkIndicatorRow,
@@ -35,6 +36,7 @@ function logResultsEvent(event: string, details?: Record<string, unknown>) {
 
 type ResultsState = {
   session: RecordingSession | null;
+  analysisJob: AnalysisJob | null;
   sessionIndicators: SessionIndicatorRow | null;
   chunkIndicators: ChunkIndicatorRow[];
 };
@@ -57,6 +59,7 @@ export default function ResultsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [state, setState] = useState<ResultsState>({
     session: null,
+    analysisJob: null,
     sessionIndicators: null,
     chunkIndicators: [],
   });
@@ -70,6 +73,7 @@ export default function ResultsScreen() {
         setLoading(true);
         logResultsEvent("results_load_started", { sessionId: id });
         const nextSession = id ? await getRecordingSessionAsync(id) : null;
+        const analysisJob = id ? await getAnalysisJobForRecordingAsync(id) : null;
         const indicatorRows = id
           ? await getIndicatorRowsForSession(id)
           : { sessionIndicators: null, chunkIndicators: [] };
@@ -77,6 +81,7 @@ export default function ResultsScreen() {
         if (!cancelled) {
           setState({
             session: nextSession,
+            analysisJob,
             sessionIndicators: indicatorRows.sessionIndicators,
             chunkIndicators: indicatorRows.chunkIndicators,
           });
@@ -84,10 +89,13 @@ export default function ResultsScreen() {
             sessionId: id,
             recordingFound: Boolean(nextSession),
             hasSessionIndicators: Boolean(indicatorRows.sessionIndicators),
+            analysisJobStatus: analysisJob?.status ?? null,
             chunkCount: indicatorRows.chunkIndicators.length,
             renderMode: indicatorRows.sessionIndicators
               ? "analysed"
-              : "not_analysed",
+              : analysisJob?.status === "failed"
+                ? "processing_failed"
+                : "not_analysed",
           });
         }
       } catch (error) {
@@ -133,8 +141,9 @@ export default function ResultsScreen() {
     );
   }
 
-  const { session, sessionIndicators, chunkIndicators } = state;
+  const { session, analysisJob, sessionIndicators, chunkIndicators } = state;
   const analysed = Boolean(sessionIndicators);
+  const processingFailed = !analysed && analysisJob?.status === "failed";
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -171,7 +180,11 @@ export default function ResultsScreen() {
               <View
                 style={[
                   styles.statusBadge,
-                  analysed ? styles.analysedBadge : styles.pendingBadge,
+                  analysed
+                    ? styles.analysedBadge
+                    : processingFailed
+                      ? styles.failedBadge
+                      : styles.pendingBadge,
                 ]}
               >
                 <Text
@@ -179,10 +192,16 @@ export default function ResultsScreen() {
                     styles.statusBadgeText,
                     analysed
                       ? styles.analysedBadgeText
+                      : processingFailed
+                        ? styles.failedBadgeText
                       : styles.pendingBadgeText,
                   ]}
                 >
-                  {analysed ? "Analysed" : "Not yet analysed"}
+                  {analysed
+                    ? "Analysed"
+                    : processingFailed
+                      ? "Processing failed"
+                      : "Not yet analysed"}
                 </Text>
               </View>
             </View>
@@ -200,7 +219,22 @@ export default function ResultsScreen() {
             </View>
           </View>
 
-          {!sessionIndicators && (
+          {!sessionIndicators && processingFailed && (
+            <View style={styles.card}>
+              <MaterialCommunityIcons
+                name="alert-circle-outline"
+                size={32}
+                color={colors.danger}
+              />
+              <Text style={styles.cardTitle}>Processing failed</Text>
+              <Text style={styles.cardBody}>
+                The recording is still saved locally and ready to process
+                again. {analysisJob.errorMessage ?? "No error detail was saved."}
+              </Text>
+            </View>
+          )}
+
+          {!sessionIndicators && !processingFailed && (
             <View style={styles.card}>
               <MaterialCommunityIcons
                 name="chart-timeline-variant"
@@ -438,6 +472,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.statusNeutralBg,
     borderColor: colors.white20,
   },
+  failedBadge: {
+    backgroundColor: colors.dangerBg,
+    borderColor: colors.dangerBorder,
+  },
   statusBadgeText: {
     fontSize: 10,
     fontFamily: "monospace",
@@ -448,6 +486,9 @@ const styles = StyleSheet.create({
   },
   pendingBadgeText: {
     color: colors.statusNeutral,
+  },
+  failedBadgeText: {
+    color: colors.danger,
   },
   metaRow: {
     flexDirection: "row",

@@ -14,10 +14,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Pill from "@/components/Pill";
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import type { RecordingSession } from "@/constants/types";
+import type { AnalysisJob, RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
 import { deleteRecordingAsync } from "@/services/recordingDelete";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
 
 function logHistoryEvent(event: string, details?: Record<string, unknown>) {
   console.log(
@@ -34,6 +35,9 @@ export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [analysisJobsBySessionId, setAnalysisJobsBySessionId] = useState<
+    Record<string, AnalysisJob | null>
+  >({});
   const [loading, setLoading] = useState(true);
 
   const loadSessions = useCallback(() => {
@@ -44,10 +48,20 @@ export default function HistoryScreen() {
         setLoading(true);
         logHistoryEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
+        const analysisJobs = await Promise.all(
+          nextSessions.map(async (session) => [
+            session.id,
+            await getAnalysisJobForRecordingAsync(session.id),
+          ] as const),
+        );
         if (!cancelled) {
           setSessions(nextSessions);
+          setAnalysisJobsBySessionId(Object.fromEntries(analysisJobs));
           logHistoryEvent("recording_list_load_completed", {
             count: nextSessions.length,
+            failedAnalysisCount: analysisJobs.filter(
+              ([, job]) => job?.status === "failed",
+            ).length,
           });
         }
       } catch (error) {
@@ -102,6 +116,11 @@ export default function HistoryScreen() {
       setSessions((current) =>
         current.filter((currentSession) => currentSession.id !== session.id),
       );
+      setAnalysisJobsBySessionId((current) => {
+        const next = { ...current };
+        delete next[session.id];
+        return next;
+      });
       logHistoryEvent("recording_delete_completed", {
         sessionId: session.id,
       });
@@ -146,67 +165,80 @@ export default function HistoryScreen() {
           </View>
         ) : (
           <View style={styles.list}>
-            {sessions.map((session, index) => (
-              <Pressable
-                key={session.id}
-                style={({ pressed }) => [
-                  styles.card,
-                  { opacity: pressed ? 0.75 : 1 },
-                ]}
-                onPress={() => router.push(`/results/${session.id}`)}
-              >
-                <View style={styles.row}>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>#{total - index}</Text>
-                  </View>
+            {sessions.map((session, index) => {
+              const analysisJob = analysisJobsBySessionId[session.id];
+              const failedAnalysis = analysisJob?.status === "failed";
 
-                  <View style={styles.content}>
-                    <Text style={styles.sessionTitle}>
-                      {session.title ?? "Recording"}
-                    </Text>
-                    <Text style={styles.meta}>
-                      {formatDateTime(session.createdAt)} -{" "}
-                      {formatDurationMs(session.durationMs)}
-                    </Text>
-                    <View style={styles.pills}>
-                      <Pill color={statusColor(session.status)}>
-                        {session.status.toUpperCase()}
-                      </Pill>
-                      {session.fileSizeBytes !== null && (
-                        <Pill color={colors.statusNeutral}>
-                          {Math.round(session.fileSizeBytes / 1024)} KB
+              return (
+                <Pressable
+                  key={session.id}
+                  style={({ pressed }) => [
+                    styles.card,
+                    { opacity: pressed ? 0.75 : 1 },
+                  ]}
+                  onPress={() => router.push(`/results/${session.id}`)}
+                >
+                  <View style={styles.row}>
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>#{total - index}</Text>
+                    </View>
+
+                    <View style={styles.content}>
+                      <Text style={styles.sessionTitle}>
+                        {session.title ?? "Recording"}
+                      </Text>
+                      <Text style={styles.meta}>
+                        {formatDateTime(session.createdAt)} -{" "}
+                        {formatDurationMs(session.durationMs)}
+                      </Text>
+                      <View style={styles.pills}>
+                        <Pill
+                          color={
+                            failedAnalysis
+                              ? colors.danger
+                              : statusColor(session.status)
+                          }
+                        >
+                          {failedAnalysis
+                            ? "PROCESSING FAILED"
+                            : session.status.toUpperCase()}
                         </Pill>
-                      )}
+                        {session.fileSizeBytes !== null && (
+                          <Pill color={colors.statusNeutral}>
+                            {Math.round(session.fileSizeBytes / 1024)} KB
+                          </Pill>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={styles.actions}>
+                      <Pressable
+                        hitSlop={10}
+                        style={({ pressed }) => [
+                          styles.deleteButton,
+                          { opacity: pressed ? 0.65 : 1 },
+                        ]}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          confirmDeleteRecording(session);
+                        }}
+                      >
+                        <MaterialCommunityIcons
+                          name="trash-can-outline"
+                          size={20}
+                          color={colors.danger}
+                        />
+                      </Pressable>
+                      <MaterialCommunityIcons
+                        name="chevron-right"
+                        size={20}
+                        color={colors.white20}
+                      />
                     </View>
                   </View>
-
-                  <View style={styles.actions}>
-                    <Pressable
-                      hitSlop={10}
-                      style={({ pressed }) => [
-                        styles.deleteButton,
-                        { opacity: pressed ? 0.65 : 1 },
-                      ]}
-                      onPress={(event) => {
-                        event.stopPropagation();
-                        confirmDeleteRecording(session);
-                      }}
-                    >
-                      <MaterialCommunityIcons
-                        name="trash-can-outline"
-                        size={20}
-                        color={colors.danger}
-                      />
-                    </Pressable>
-                    <MaterialCommunityIcons
-                      name="chevron-right"
-                      size={20}
-                      color={colors.white20}
-                    />
-                  </View>
-                </View>
-              </Pressable>
-            ))}
+                </Pressable>
+              );
+            })}
           </View>
         )}
       </ScrollView>

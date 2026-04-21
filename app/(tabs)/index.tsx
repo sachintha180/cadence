@@ -6,8 +6,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import type { RecordingSession } from "@/constants/types";
+import type { AnalysisJob, RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
 
 function logHomeEvent(event: string, details?: Record<string, unknown>) {
@@ -25,6 +26,9 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [analysisJobsBySessionId, setAnalysisJobsBySessionId] = useState<
+    Record<string, AnalysisJob | null>
+  >({});
 
   const loadSessions = useCallback(() => {
     let cancelled = false;
@@ -33,10 +37,20 @@ export default function HomeScreen() {
       try {
         logHomeEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
+        const analysisJobs = await Promise.all(
+          nextSessions.map(async (session) => [
+            session.id,
+            await getAnalysisJobForRecordingAsync(session.id),
+          ] as const),
+        );
         if (!cancelled) {
           setSessions(nextSessions);
+          setAnalysisJobsBySessionId(Object.fromEntries(analysisJobs));
           logHomeEvent("recording_list_load_completed", {
             count: nextSessions.length,
+            failedAnalysisCount: analysisJobs.filter(
+              ([, job]) => job?.status === "failed",
+            ).length,
           });
         }
       } catch (error) {
@@ -127,33 +141,43 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.sessionList}>
-            {sessions.slice(0, 2).map((session) => (
-              <Pressable
-                key={session.id}
-                style={({ pressed }) => [
-                  styles.recordingCard,
-                  { opacity: pressed ? 0.75 : 1 },
-                ]}
-                onPress={() => router.push(`/results/${session.id}`)}
-              >
-                <View style={styles.recordingRow}>
-                  <View style={styles.recordingContent}>
-                    <Text style={styles.recordingTitle}>
-                      {session.title ?? "Recording"}
-                    </Text>
-                    <Text style={styles.recordingMeta}>
-                      {formatDateTime(session.createdAt)} -{" "}
-                      {formatDurationMs(session.durationMs)}
-                    </Text>
+            {sessions.slice(0, 2).map((session) => {
+              const analysisJob = analysisJobsBySessionId[session.id];
+              const failedAnalysis = analysisJob?.status === "failed";
+
+              return (
+                <Pressable
+                  key={session.id}
+                  style={({ pressed }) => [
+                    styles.recordingCard,
+                    { opacity: pressed ? 0.75 : 1 },
+                  ]}
+                  onPress={() => router.push(`/results/${session.id}`)}
+                >
+                  <View style={styles.recordingRow}>
+                    <View style={styles.recordingContent}>
+                      <Text style={styles.recordingTitle}>
+                        {session.title ?? "Recording"}
+                      </Text>
+                      <Text style={styles.recordingMeta}>
+                        {formatDateTime(session.createdAt)} -{" "}
+                        {formatDurationMs(session.durationMs)}
+                      </Text>
+                      {failedAnalysis && (
+                        <Text style={styles.recordingFailure}>
+                          Processing failed
+                        </Text>
+                      )}
+                    </View>
+                    <MaterialCommunityIcons
+                      name="chevron-right"
+                      size={18}
+                      color={colors.white20}
+                    />
                   </View>
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={18}
-                    color={colors.white20}
-                  />
-                </View>
-              </Pressable>
-            ))}
+                </Pressable>
+              );
+            })}
 
             {sessions.length === 0 && (
               <View style={styles.emptyCard}>
@@ -308,6 +332,12 @@ const styles = StyleSheet.create({
     color: colors.white40,
     fontFamily: "monospace",
     marginTop: 4,
+  },
+  recordingFailure: {
+    fontSize: 11,
+    color: colors.danger,
+    fontFamily: "monospace",
+    marginTop: 6,
   },
   emptyCard: {
     borderRadius: 16,

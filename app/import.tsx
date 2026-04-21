@@ -12,6 +12,7 @@ import colors from "@/constants/colors";
 import type { RecordingSession } from "@/constants/types";
 import { formatDateTime } from "@/constants/helpers";
 import { logImportEvent } from "@/services/importLog";
+import { updateAnalysisJobAsync } from "@/services/analysisDb";
 import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
 import { createRecordingSessionAsync } from "@/services/recordingDb";
 import {
@@ -211,6 +212,21 @@ export default function ImportScreen() {
       router.replace(`/results/${session.id}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Import failed.";
+
+      if (createdSession) {
+        await updateAnalysisJobAsync(createdSession.id, {
+          status: "failed",
+          errorMessage: message,
+        }).catch((jobError) => {
+          logImportEvent("analysis_job_failure_update_failed", {
+            sessionId: createdSession?.id,
+            details: {
+              message:
+                jobError instanceof Error ? jobError.message : String(jobError),
+            },
+          });
+        });
+      }
 
       if (!createdSession && copiedPath) {
         await deleteRecordingFileAsync(copiedPath)

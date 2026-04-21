@@ -15,6 +15,7 @@ export type ImportEventName =
   | "inference_started"
   | "inference_progress"
   | "inference_completed"
+  | "analysis_job_failure_update_failed"
   | "cleanup_completed"
   | "cleanup_failed"
   | "import_completed"
