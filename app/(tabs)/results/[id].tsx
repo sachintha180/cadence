@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   ScrollView,
@@ -11,6 +11,7 @@ import { useLocalSearchParams, router } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useModel } from "@/components/ModelProvider";
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
 import type { AnalysisJob, RecordingSession } from "@/constants/types";
@@ -22,6 +23,10 @@ import {
   type SessionIndicatorRow,
 } from "@/src/db/indicatorRepository";
 import { getRecordingSessionAsync } from "@/services/recordingDb";
+import {
+  processRecordingSessionAsync,
+  type ProcessingStatus,
+} from "@/services/sessionProcessing";
 
 function logResultsEvent(event: string, details?: Record<string, unknown>) {
   console.log(
@@ -53,9 +58,36 @@ function formatMetric(value: number) {
   return value.toFixed(4);
 }
 
+type ProcessActionProps = {
+  disabled: boolean;
+  label: string;
+  onPress: () => void;
+};
+
+function ProcessAction({ disabled, label, onPress }: ProcessActionProps) {
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.processButton,
+        { opacity: disabled ? 0.5 : pressed ? 0.85 : 1 },
+      ]}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <MaterialCommunityIcons
+        name="play-circle-outline"
+        size={18}
+        color={colors.bgSurface}
+      />
+      <Text style={styles.processButtonText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export default function ResultsScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  const { getModel } = useModel();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [state, setState] = useState<ResultsState>({
     session: null,
@@ -64,8 +96,10 @@ export default function ResultsScreen() {
     chunkIndicators: [],
   });
   const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState("Processing audio...");
 
-  useEffect(() => {
+  const loadResults = useCallback(() => {
     let cancelled = false;
 
     async function loadSession() {
@@ -117,6 +151,83 @@ export default function ResultsScreen() {
     };
   }, [id, showToast]);
 
+  useEffect(loadResults, [loadResults]);
+
+  function labelForProcessingStatus(status: ProcessingStatus) {
+    switch (status) {
+      case "loading_model":
+        return "Loading model...";
+      case "model_loaded":
+        return "Preparing audio...";
+      case "preprocessing":
+        return "Preparing audio...";
+      case "running_inference":
+        return "Running inference...";
+      case "completed":
+        return "Processing complete.";
+      default:
+        return "Processing audio...";
+    }
+  }
+
+  async function processFromResults() {
+    const session = state.session;
+
+    if (!session || isProcessing || state.sessionIndicators) {
+      return;
+    }
+
+    try {
+      setIsProcessing(true);
+      setProcessingLabel("Processing audio...");
+      logResultsEvent("results_processing_started", {
+        sessionId: session.id,
+        previousAnalysisJobStatus: state.analysisJob?.status ?? null,
+      });
+
+      const result = await processRecordingSessionAsync({
+        sessionId: session.id,
+        getModel,
+        onStatus: (status) => {
+          const label = labelForProcessingStatus(status);
+          setProcessingLabel(label);
+          logResultsEvent("results_processing_status", {
+            sessionId: session.id,
+            status,
+          });
+        },
+        onInferenceProgress: (chunkIndex, total) => {
+          setProcessingLabel(`Running inference ${chunkIndex}/${total} chunks...`);
+          logResultsEvent("results_processing_progress", {
+            sessionId: session.id,
+            chunkIndex,
+            total,
+          });
+        },
+      });
+
+      logResultsEvent("results_processing_completed", {
+        sessionId: session.id,
+        totalChunks: result.totalChunks,
+        totalInferenceTimeMs: result.totalInferenceTimeMs,
+      });
+      showToast({ message: "Recording processed.", kind: "success" });
+      loadResults();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Processing failed.";
+      logResultsEvent("results_processing_failed", {
+        sessionId: session.id,
+        message,
+      });
+      showToast({ message, kind: "error" });
+      loadResults();
+    } finally {
+      setIsProcessing(false);
+      setProcessingLabel("Processing audio...");
+    }
+  }
+
   const maxChunkRms = useMemo(() => {
     return Math.max(0, ...state.chunkIndicators.map((chunk) => chunk.mean_rms));
   }, [state.chunkIndicators]);
@@ -144,6 +255,10 @@ export default function ResultsScreen() {
   const { session, analysisJob, sessionIndicators, chunkIndicators } = state;
   const analysed = Boolean(sessionIndicators);
   const processingFailed = !analysed && analysisJob?.status === "failed";
+  const canProcess = !analysed && !isProcessing;
+  const processButtonLabel = processingFailed
+    ? "Retry Processing"
+    : "Process Recording";
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -180,7 +295,9 @@ export default function ResultsScreen() {
               <View
                 style={[
                   styles.statusBadge,
-                  analysed
+                  isProcessing
+                    ? styles.processingBadge
+                    : analysed
                     ? styles.analysedBadge
                     : processingFailed
                       ? styles.failedBadge
@@ -190,14 +307,18 @@ export default function ResultsScreen() {
                 <Text
                   style={[
                     styles.statusBadgeText,
-                    analysed
+                    isProcessing
+                      ? styles.processingBadgeText
+                      : analysed
                       ? styles.analysedBadgeText
                       : processingFailed
                         ? styles.failedBadgeText
                       : styles.pendingBadgeText,
                   ]}
                 >
-                  {analysed
+                  {isProcessing
+                    ? "Processing"
+                    : analysed
                     ? "Analysed"
                     : processingFailed
                       ? "Processing failed"
@@ -231,6 +352,11 @@ export default function ResultsScreen() {
                 The recording is still saved locally and ready to process
                 again. {analysisJob.errorMessage ?? "No error detail was saved."}
               </Text>
+              <ProcessAction
+                disabled={!canProcess}
+                label={isProcessing ? processingLabel : processButtonLabel}
+                onPress={processFromResults}
+              />
             </View>
           )}
 
@@ -243,9 +369,14 @@ export default function ResultsScreen() {
               />
               <Text style={styles.cardTitle}>Analysis not run yet</Text>
               <Text style={styles.cardBody}>
-                This recording is saved locally. Process it from the Record
-                screen to generate speech activity, energy, and pause metrics.
+                This recording is saved locally. Process it here to generate
+                speech activity, energy, and pause metrics.
               </Text>
+              <ProcessAction
+                disabled={!canProcess}
+                label={isProcessing ? processingLabel : processButtonLabel}
+                onPress={processFromResults}
+              />
             </View>
           )}
 
@@ -472,6 +603,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.statusNeutralBg,
     borderColor: colors.white20,
   },
+  processingBadge: {
+    backgroundColor: colors.accentBgSubtle,
+    borderColor: colors.accentBorderStrong,
+  },
   failedBadge: {
     backgroundColor: colors.dangerBg,
     borderColor: colors.dangerBorder,
@@ -487,8 +622,30 @@ const styles = StyleSheet.create({
   pendingBadgeText: {
     color: colors.statusNeutral,
   },
+  processingBadgeText: {
+    color: colors.accent,
+  },
   failedBadgeText: {
     color: colors.danger,
+  },
+  processButton: {
+    width: "100%",
+    minHeight: 50,
+    borderRadius: 14,
+    backgroundColor: colors.accent,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    marginTop: 18,
+  },
+  processButtonText: {
+    flexShrink: 1,
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.bgSurface,
+    textAlign: "center",
   },
   metaRow: {
     flexDirection: "row",

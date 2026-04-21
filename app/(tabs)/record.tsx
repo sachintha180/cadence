@@ -35,13 +35,8 @@ import type {
   RecordingSession,
 } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
-import {
-  getAnalysisJobForRecordingAsync,
-  updateAnalysisJobAsync,
-} from "@/services/analysisDb";
-import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
-import { indicatorExtractionCallback } from "@/src/ml/indicatorExtractor";
-import { runSessionInference } from "@/src/ml/inferenceEngine";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
+import { processRecordingSessionAsync } from "@/services/sessionProcessing";
 import type { SessionInferenceResult } from "@/src/types/indicators";
 import {
   createRecordingSessionAsync,
@@ -484,36 +479,29 @@ export default function RecordScreen() {
       await stopPlayback();
       setIsPreprocessing(true);
       setInferenceResult(null);
-      setProcessingLabel(
-        modelState === "loading" ? "Loading model..." : "Processing audio...",
-      );
-      const model = await getModel();
-      setProcessingLabel("Processing audio...");
-      const { job: nextJob, chunks } =
-        await preprocessRecordingForInferenceAsync(activeSession.id);
-      setAnalysisJob(nextJob);
+      const nextInferenceResult = await processRecordingSessionAsync({
+        sessionId: activeSession.id,
+        getModel,
+        onStatus: (status) => {
+          if (status === "loading_model") {
+            setProcessingLabel(
+              modelState === "loading"
+                ? "Loading model..."
+                : "Processing audio...",
+            );
+          }
 
-      if (nextJob.status !== "preprocessed") {
-        showToast({
-          message: nextJob.errorMessage ?? "Preprocessing failed.",
-          kind: "error",
-        });
-        return;
-      }
+          if (status === "preprocessing") {
+            setProcessingLabel("Processing audio...");
+          }
 
-      if (chunks.length === 0) {
-        throw new Error("No audio chunks were created for inference.");
-      }
-
-      setProcessingLabel("Running inference...");
-      const nextInferenceResult = await runSessionInference(
-        model,
-        chunks,
-        activeSession.id,
-        activeSession.durationMs,
-        indicatorExtractionCallback,
-      );
+          if (status === "running_inference") {
+            setProcessingLabel("Running inference...");
+          }
+        },
+      });
       setInferenceResult(nextInferenceResult);
+      await loadAnalysisJob(activeSession.id);
 
       console.log(
         `[Cadence] Session inference complete: ${nextInferenceResult.totalChunks} chunks, ${nextInferenceResult.totalInferenceTimeMs}ms total, ${nextInferenceResult.averageChunkTimeMs}ms avg per chunk`,
@@ -536,10 +524,6 @@ export default function RecordScreen() {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Processing failed.";
-      await updateAnalysisJobAsync(activeSession.id, {
-        status: "failed",
-        errorMessage: message,
-      });
       await loadAnalysisJob(activeSession.id);
       showToast({ message, kind: "error" });
     } finally {

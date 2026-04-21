@@ -13,7 +13,7 @@ import type { RecordingSession } from "@/constants/types";
 import { formatDateTime } from "@/constants/helpers";
 import { logImportEvent } from "@/services/importLog";
 import { updateAnalysisJobAsync } from "@/services/analysisDb";
-import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
+import { processRecordingSessionAsync } from "@/services/sessionProcessing";
 import { createRecordingSessionAsync } from "@/services/recordingDb";
 import {
   copyImportedRecordingAsync,
@@ -21,8 +21,6 @@ import {
   getSupportedImportExtension,
   validateImportedRecordingFileAsync,
 } from "@/services/recordingFiles";
-import { indicatorExtractionCallback } from "@/src/ml/indicatorExtractor";
-import { runSessionInference } from "@/src/ml/inferenceEngine";
 
 type ImportState =
   | "idle"
@@ -151,59 +149,48 @@ export default function ImportScreen() {
       });
 
       setImportState("processing");
-      setStatusLabel(
-        modelState === "loading" ? "Loading model..." : "Processing audio...",
-      );
       logImportEvent("model_requested", {
         sessionId: session.id,
         details: { modelState },
       });
-      const model = await getModel();
-      logImportEvent("model_loaded", { sessionId: session.id });
-      setStatusLabel("Preparing audio for inference...");
-      logImportEvent("preprocessing_started", { sessionId: session.id });
-      const { job, chunks } = await preprocessRecordingForInferenceAsync(
-        session.id,
-      );
-
-      if (job.status !== "preprocessed") {
-        throw new Error(job.errorMessage ?? "Preprocessing failed.");
-      }
-
-      if (chunks.length === 0) {
-        throw new Error("No audio chunks were created for inference.");
-      }
-
-      const processedDurationMs = job.processedDurationMs ?? session.durationMs;
-
-      if (processedDurationMs <= 0) {
-        throw new Error("Preprocessing did not return a valid duration.");
-      }
-
-      logImportEvent("preprocessing_completed", {
+      await processRecordingSessionAsync({
         sessionId: session.id,
-        details: { chunks: chunks.length, durationMs: processedDurationMs },
-      });
-      setStatusLabel("Running inference and saving indicators...");
-      logImportEvent("inference_started", {
-        sessionId: session.id,
-        details: { chunks: chunks.length },
-      });
-      await runSessionInference(
-        model,
-        chunks,
-        session.id,
-        processedDurationMs,
-        indicatorExtractionCallback,
-        (chunkIndex, total) => {
+        getModel,
+        onStatus: (status) => {
+          if (status === "loading_model") {
+            setStatusLabel(
+              modelState === "loading"
+                ? "Loading model..."
+                : "Processing audio...",
+            );
+          }
+
+          if (status === "model_loaded") {
+            logImportEvent("model_loaded", { sessionId: session.id });
+          }
+
+          if (status === "preprocessing") {
+            setStatusLabel("Preparing audio for inference...");
+            logImportEvent("preprocessing_started", { sessionId: session.id });
+          }
+
+          if (status === "running_inference") {
+            setStatusLabel("Running inference and saving indicators...");
+            logImportEvent("inference_started", { sessionId: session.id });
+          }
+
+          if (status === "completed") {
+            logImportEvent("inference_completed", { sessionId: session.id });
+          }
+        },
+        onInferenceProgress: (chunkIndex, total) => {
           setStatusLabel(`Running inference ${chunkIndex}/${total} chunks...`);
           logImportEvent("inference_progress", {
             sessionId: session.id,
             details: { chunkIndex, total },
           });
         },
-      );
-      logImportEvent("inference_completed", { sessionId: session.id });
+      });
 
       setImportState("completed");
       setStatusLabel("Import processed.");
