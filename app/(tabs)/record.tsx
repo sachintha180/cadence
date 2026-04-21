@@ -22,6 +22,7 @@ import * as Crypto from "expo-crypto";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useModel } from "@/components/ModelProvider";
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
 import {
@@ -34,8 +35,15 @@ import type {
   RecordingSession,
 } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
-import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
-import { preprocessRecordingAsync } from "@/services/audioPreprocessing";
+import {
+  getAnalysisJobForRecordingAsync,
+  updateAnalysisJobAsync,
+} from "@/services/analysisDb";
+import { preprocessRecordingForInferenceAsync } from "@/services/audioPreprocessing";
+import {
+  runSessionInference,
+  type SessionInferenceResult,
+} from "@/src/ml/inferenceEngine";
 import {
   createRecordingSessionAsync,
   updateRecordingSessionAsync,
@@ -52,6 +60,7 @@ import { logRecorderEvent } from "@/services/recordingLog";
 export default function RecordScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  const { getModel, state: modelState, error: modelError } = useModel();
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const audioRecorderState = useAudioRecorderState(audioRecorder, 500);
   const [recorderState, setRecorderState] = useState<RecorderState>("idle");
@@ -64,6 +73,9 @@ export default function RecordScreen() {
   >("idle");
   const [analysisJob, setAnalysisJob] = useState<AnalysisJob | null>(null);
   const [isPreprocessing, setIsPreprocessing] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState("Processing audio...");
+  const [inferenceResult, setInferenceResult] =
+    useState<SessionInferenceResult | null>(null);
 
   const playerRef = useRef<AudioPlayer | null>(null);
   const playbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -210,6 +222,7 @@ export default function RecordScreen() {
 
           setActiveSession(readySession);
           setAnalysisJob(null);
+          setInferenceResult(null);
           setElapsedMs(durationMs);
           setRecorderState("ready");
           showToast({
@@ -353,6 +366,7 @@ export default function RecordScreen() {
 
       setRecorderState("preparing");
       setAnalysisJob(null);
+      setInferenceResult(null);
       await ensureRecordingsDirectoryAsync();
       await setAudioModeAsync({
         allowsRecording: true,
@@ -385,6 +399,7 @@ export default function RecordScreen() {
       audioRecorder.record();
 
       setActiveSession(session);
+      setInferenceResult(null);
       setElapsedMs(0);
       setRecorderState("recording");
       logRecorderEvent("recording_started", { sessionId: id });
@@ -469,32 +484,70 @@ export default function RecordScreen() {
     try {
       await stopPlayback();
       setIsPreprocessing(true);
-      const nextJob = await preprocessRecordingAsync(activeSession.id);
+      setInferenceResult(null);
+      setProcessingLabel(
+        modelState === "loading" ? "Loading model..." : "Processing audio...",
+      );
+      const model = await getModel();
+      setProcessingLabel("Processing audio...");
+      const { job: nextJob, chunks } =
+        await preprocessRecordingForInferenceAsync(activeSession.id);
       setAnalysisJob(nextJob);
 
-      if (nextJob.status === "preprocessed") {
-        showToast({ message: "Recording processed.", kind: "success" });
-      } else {
+      if (nextJob.status !== "preprocessed") {
         showToast({
           message: nextJob.errorMessage ?? "Preprocessing failed.",
           kind: "error",
         });
+        return;
       }
+
+      if (chunks.length === 0) {
+        throw new Error("No audio chunks were created for inference.");
+      }
+
+      setProcessingLabel("Running inference...");
+      const nextInferenceResult = await runSessionInference(model, chunks);
+      setInferenceResult(nextInferenceResult);
+
+      console.log(
+        `[Cadence] Session inference complete: ${nextInferenceResult.totalChunks} chunks, ${nextInferenceResult.totalInferenceTimeMs}ms total, ${nextInferenceResult.averageChunkTimeMs}ms avg per chunk`,
+      );
+
+      await updateRecordingSessionAsync(activeSession.id, {
+        status: "completed",
+        errorMessage: null,
+      });
+
+      const completedSession: RecordingSession = {
+        ...activeSession,
+        status: "completed",
+        errorMessage: null,
+        updatedAt: new Date().toISOString(),
+      };
+
+      setActiveSession(completedSession);
+      showToast({ message: "Recording processed.", kind: "success" });
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Preprocessing failed.";
+        error instanceof Error ? error.message : "Processing failed.";
+      await updateAnalysisJobAsync(activeSession.id, {
+        status: "failed",
+        errorMessage: message,
+      });
       await loadAnalysisJob(activeSession.id);
       showToast({ message, kind: "error" });
     } finally {
       setIsPreprocessing(false);
+      setProcessingLabel("Processing audio...");
     }
   }
 
   const canStart =
     !isPreprocessing &&
     (recorderState === "idle" ||
-      recorderState === "ready" ||
-      recorderState === "failed");
+      recorderState === "failed" ||
+      activeSession?.status === "completed");
   const isBusy =
     isPreprocessing ||
     recorderState === "requesting_permission" ||
@@ -602,7 +655,7 @@ export default function RecordScreen() {
           {isBusy && (
             <Text style={styles.processLabel}>
               {isPreprocessing
-                ? "Processing audio..."
+                ? processingLabel
                 : recorderState === "validating"
                   ? "Checking recording..."
                   : "Preparing recorder..."}
@@ -615,6 +668,7 @@ export default function RecordScreen() {
               <Text style={styles.playbackMeta}>
                 {formatDurationMs(activeSession.durationMs)} -{" "}
                 {Math.round((activeSession.fileSizeBytes ?? 0) / 1024)} KB
+                {activeSession.status === "completed" ? " - COMPLETED" : ""}
               </Text>
               <Pressable
                 style={({ pressed }) => [
@@ -648,9 +702,11 @@ export default function RecordScreen() {
                 <Text style={styles.primaryButtonText}>
                   {analysisJob?.status === "failed"
                     ? "Retry Processing"
-                    : analysisJob?.status === "preprocessed"
-                      ? "Process Again"
-                      : "Process Recording"}
+                    : activeSession.status === "completed"
+                      ? "Run Again"
+                      : analysisJob?.status === "preprocessed"
+                        ? "Process Again"
+                        : "Process Recording"}
                 </Text>
               </Pressable>
               {analysisJob && (
@@ -667,9 +723,20 @@ export default function RecordScreen() {
                       KB
                     </Text>
                   )}
+                  {inferenceResult && (
+                    <Text style={styles.analysisText}>
+                      {inferenceResult.totalChunks} chunks -{" "}
+                      {Math.round(inferenceResult.averageChunkTimeMs)} ms avg
+                    </Text>
+                  )}
                   {analysisJob.status === "failed" && (
                     <Text style={styles.analysisError}>
                       {analysisJob.errorMessage}
+                    </Text>
+                  )}
+                  {modelState === "error" && modelError && (
+                    <Text style={styles.analysisError}>
+                      Model load failed: {modelError.message}
                     </Text>
                   )}
                 </View>
