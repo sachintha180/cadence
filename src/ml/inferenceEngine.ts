@@ -1,4 +1,8 @@
 import { VAD_CONFIG } from "@/src/constants/vadConfig";
+import {
+  saveChunkIndicators,
+  saveSessionIndicators,
+} from "@/src/db/indicatorRepository";
 import type { TFLiteModel } from "@/src/ml/modelLoader";
 import type {
   ChunkIndicators,
@@ -116,18 +120,12 @@ function buildSpeechActivityAggregates(
   chunkIndicators: ChunkIndicators[],
   sessionDurationMs: number,
 ): SessionSpeechActivityAggregates {
-  const totalSpeechMs = chunkIndicators.reduce(
-    (total, chunk) =>
-      total +
-      chunk.speechActivity.speechFrameCount * VAD_CONFIG.RMS_FRAME_DURATION_MS,
-    0,
-  );
-  const totalSilenceMs = chunkIndicators.reduce(
-    (total, chunk) =>
-      total +
-      chunk.speechActivity.silenceFrameCount * VAD_CONFIG.RMS_FRAME_DURATION_MS,
-    0,
-  );
+  const totalSpeechMs = chunkIndicators.reduce((total, chunk) => {
+    return (
+      total + chunk.chunkDurationMs * chunk.speechActivity.chunkSpeechRatio
+    );
+  }, 0);
+  const totalSilenceMs = Math.max(0, sessionDurationMs - totalSpeechMs);
 
   return {
     totalSpeechMs,
@@ -203,7 +201,9 @@ export async function runSessionInference(
       `[Cadence] Chunk ${index}/${chunks.length}: inference=${inferenceTimeMs}ms | output[0..2]=[${preview}]`,
     );
 
-    chunkIndicators.push(extractionCallback(index, chunk, embeddings));
+    const indicators = extractionCallback(index, chunk, embeddings);
+    await saveChunkIndicators(sessionId, indicators);
+    chunkIndicators.push(indicators);
     inferenceTimes.push(inferenceTimeMs);
     onProgress?.(index + 1, chunks.length);
   }
@@ -217,6 +217,7 @@ export async function runSessionInference(
       ? totalInferenceTimeMs / inferenceTimes.length
       : 0;
   const sessionIndicators = buildSessionIndicators(sessionId, chunkIndicators);
+  await saveSessionIndicators(sessionIndicators);
 
   console.log(
     `[Cadence] Stream-and-discard complete: ${chunkIndicators.length} chunks | indicators accumulated | peak embedding memory ~1.5MB`,
