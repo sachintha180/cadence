@@ -18,6 +18,11 @@ import type {
 const EXPECTED_CHUNK_LENGTH = 160000;
 const CHUNK_DURATION_MS = 10000;
 
+function getTrueChunkDurationMs(chunkIndex: number, totalDurationMs: number) {
+  const remainingDurationMs = totalDurationMs - chunkIndex * CHUNK_DURATION_MS;
+  return Math.max(0, Math.min(CHUNK_DURATION_MS, remainingDurationMs));
+}
+
 function toExactArrayBuffer(chunk: Float32Array): ArrayBuffer {
   const start = chunk.byteOffset;
   const end = start + chunk.byteLength;
@@ -164,6 +169,7 @@ export async function runSessionInference(
   model: TFLiteModel,
   chunks: Float32Array[],
   sessionId: string,
+  totalDurationMs: number,
   extractionCallback: IndicatorExtractionCallback,
   onProgress?: (chunkIndex: number, total: number) => void,
 ): Promise<SessionInferenceResult> {
@@ -201,7 +207,13 @@ export async function runSessionInference(
       `[Cadence] Chunk ${index}/${chunks.length}: inference=${inferenceTimeMs}ms | output[0..2]=[${preview}]`,
     );
 
-    const indicators = extractionCallback(index, chunk, embeddings);
+    const trueChunkDurationMs = getTrueChunkDurationMs(index, totalDurationMs);
+    const indicators = extractionCallback(
+      index,
+      chunk,
+      embeddings,
+      trueChunkDurationMs,
+    );
     await saveChunkIndicators(sessionId, indicators);
     chunkIndicators.push(indicators);
     inferenceTimes.push(inferenceTimeMs);

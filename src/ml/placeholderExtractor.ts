@@ -7,18 +7,14 @@ import { CHUNK_DURATION_MS } from "./inferenceEngine";
 
 export const placeholderExtractionCallback: IndicatorExtractionCallback = (
   chunkIndex,
+  _pcmChunk,
+  _embeddings,
+  trueChunkDurationMs,
 ): ChunkIndicators => {
-  // chunkDurationMs is approximate for the final chunk -- the callback
-  // signature does not carry sessionDurationMs. 4B.3 can resolve this
-  // by computing true final chunk duration as:
-  // sessionDurationMs - (chunkIndex * CHUNK_DURATION_MS)
-  // if sessionDurationMs is threaded through from the preprocessing result.
-  const chunkDurationMs = CHUNK_DURATION_MS;
-
   return {
     chunkIndex,
     chunkStartMs: chunkIndex * CHUNK_DURATION_MS,
-    chunkDurationMs,
+    chunkDurationMs: trueChunkDurationMs,
     pause: {
       pauseCount: 0,
       totalPauseDurationMs: 0,

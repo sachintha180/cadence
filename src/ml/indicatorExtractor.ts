@@ -3,33 +3,29 @@ import type {
   IndicatorExtractionCallback,
 } from "@/src/types/indicators";
 
-/**
- * Silero VAD was evaluated and rejected for this build:
- * 1. The Silero team confirmed ONNX to TFLite conversion requires
- *    reimplementing the model from scratch in TensorFlow.
- * 2. Silero VAD is an RNN with stateful LSTM hidden state, which would require
- *    per-chunk state management with no validated conversion path.
- * 3. CPU-only Helio G85-class devices cannot absorb another VAD model alongside
- *    the measured 15.4s/chunk Wav2Vec2 inference budget.
- * 4. Adaptive amplitude-threshold VAD is sufficient for post-hoc classroom
- *    speech analytics and avoids adding another native/model dependency.
- */
 const FRAME_SIZE = 512;
 const SAMPLE_RATE = 16000;
-const CHUNK_DURATION_MS = 10000;
 const ADAPTIVE_THRESHOLD_MULTIPLIER = 2.5;
 const MIN_SILENCE_THRESHOLD = 0.001;
 const MIN_PAUSE_FRAMES = 8;
 
-function computeFrameRms(pcmChunk: Float32Array, frameStart: number) {
+function computeFrameRms(
+  pcmChunk: Float32Array,
+  frameStart: number,
+  frameEnd: number,
+) {
   let sumSquares = 0;
+  const sampleCount = Math.max(0, frameEnd - frameStart);
+  if (sampleCount === 0) {
+    return 0;
+  }
 
-  for (let sampleIndex = 0; sampleIndex < FRAME_SIZE; sampleIndex += 1) {
-    const sample = pcmChunk[frameStart + sampleIndex] ?? 0;
+  for (let sampleIndex = frameStart; sampleIndex < frameEnd; sampleIndex += 1) {
+    const sample = pcmChunk[sampleIndex] ?? 0;
     sumSquares += sample * sample;
   }
 
-  return Math.sqrt(sumSquares / FRAME_SIZE);
+  return Math.sqrt(sumSquares / sampleCount);
 }
 
 function mean(values: number[]) {
@@ -82,13 +78,20 @@ void createConstantToneChunk;
 export const indicatorExtractionCallback: IndicatorExtractionCallback = (
   chunkIndex,
   pcmChunk,
+  _embeddings,
+  trueChunkDurationMs,
 ): ChunkIndicators => {
-  const frameCount = Math.floor(pcmChunk.length / FRAME_SIZE);
+  const realSampleCount = Math.min(
+    pcmChunk.length,
+    Math.max(0, Math.round((trueChunkDurationMs / 1000) * SAMPLE_RATE)),
+  );
+  const frameCount = Math.ceil(realSampleCount / FRAME_SIZE);
   const frameRmsValues: number[] = [];
 
   for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
     const frameStart = frameIndex * FRAME_SIZE;
-    const frameRms = computeFrameRms(pcmChunk, frameStart);
+    const frameEnd = Math.min(frameStart + FRAME_SIZE, realSampleCount);
+    const frameRms = computeFrameRms(pcmChunk, frameStart, frameEnd);
     frameRmsValues.push(frameRms);
   }
 
@@ -142,9 +145,8 @@ export const indicatorExtractionCallback: IndicatorExtractionCallback = (
 
   return {
     chunkIndex,
-    chunkStartMs: chunkIndex * CHUNK_DURATION_MS,
-    // TODO: true final chunk duration in later pass.
-    chunkDurationMs: CHUNK_DURATION_MS,
+    chunkStartMs: chunkIndex * 10000,
+    chunkDurationMs: trueChunkDurationMs,
     pause: {
       pauseCount,
       totalPauseDurationMs: pauseDurationMs,
