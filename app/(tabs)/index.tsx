@@ -10,6 +10,17 @@ import type { RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
 
+function logHomeEvent(event: string, details?: Record<string, unknown>) {
+  console.log(
+    "[home]",
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+    }),
+  );
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
@@ -20,13 +31,18 @@ export default function HomeScreen() {
 
     async function run() {
       try {
+        logHomeEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
         if (!cancelled) {
           setSessions(nextSessions);
+          logHomeEvent("recording_list_load_completed", {
+            count: nextSessions.length,
+          });
         }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Could not load recordings.";
+        logHomeEvent("recording_list_load_failed", { message });
         showToast({ message, kind: "error" });
       }
     }
@@ -75,6 +91,20 @@ export default function HomeScreen() {
               color={colors.bgSurface}
             />
             <Text style={styles.ctaText}>Start New Recording</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.importButton,
+              { opacity: pressed ? 0.8 : 1 },
+            ]}
+            onPress={() => router.navigate("/import")}
+          >
+            <MaterialCommunityIcons
+              name="file-upload-outline"
+              size={18}
+              color={colors.accent}
+            />
+            <Text style={styles.importText}>Import Recording</Text>
           </Pressable>
         </View>
 
@@ -201,6 +231,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: colors.bgSurface,
+  },
+  importButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: colors.accentBgSubtle,
+    borderWidth: 1,
+    borderColor: colors.accentBorderStrong,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    marginTop: 12,
+  },
+  importText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.accent,
   },
   section: {
     paddingHorizontal: 24,
