@@ -4,6 +4,7 @@ import type {
   RecordingSession,
   RecordingSessionStatus,
 } from "@/constants/types";
+import { logDbEvent } from "@/services/dbLog";
 
 type RecordingSessionRow = {
   id: string;
@@ -118,6 +119,8 @@ export async function getRecordingDbAsync() {
         );
       `);
 
+      logDbEvent("database_initialized");
+
       return db;
     });
   }
@@ -150,6 +153,14 @@ export async function createRecordingSessionAsync(session: RecordingSession) {
     session.errorMessage,
     session.updatedAt,
   );
+  logDbEvent("recording_session_created", {
+    sessionId: session.id,
+    details: {
+      status: session.status,
+      durationMs: session.durationMs,
+      fileSizeBytes: session.fileSizeBytes,
+    },
+  });
 }
 
 export async function updateRecordingSessionAsync(
@@ -170,6 +181,10 @@ export async function updateRecordingSessionAsync(
   const existing = await getRecordingSessionAsync(id);
 
   if (!existing) {
+    logDbEvent("recording_session_update_skipped", {
+      sessionId: id,
+      details: { reason: "missing" },
+    });
     return;
   }
 
@@ -198,6 +213,14 @@ export async function updateRecordingSessionAsync(
     next.updatedAt,
     id,
   );
+  logDbEvent("recording_session_updated", {
+    sessionId: id,
+    details: {
+      status: next.status,
+      durationMs: next.durationMs,
+      fileSizeBytes: next.fileSizeBytes,
+    },
+  });
 }
 
 export async function getRecordingSessionAsync(id: string) {
@@ -216,10 +239,15 @@ export async function listRecordingSessionsAsync() {
     "SELECT * FROM recording_sessions WHERE status != 'failed' ORDER BY created_at DESC",
   );
 
+  logDbEvent("recording_sessions_listed", {
+    details: { count: rows.length },
+  });
+
   return rows.map(rowToRecordingSession);
 }
 
 export async function deleteRecordingSessionAsync(id: string) {
   const db = await getRecordingDbAsync();
   await db.runAsync("DELETE FROM recording_sessions WHERE id = ?", id);
+  logDbEvent("recording_session_deleted", { sessionId: id });
 }
