@@ -11,7 +11,11 @@ export type RecorderEventName =
   | "recording_failed"
   | "playback_started"
   | "playback_failed"
-  | "interruption_pause_failed_saved";
+  | "interruption_pause_failed_saved"
+  | "recording_delete_requested"
+  | "recording_delete_completed"
+  | "recording_discard_started"
+  | "recording_discard_completed";
 
 export type RecorderEventLog = {
   timestamp: string;
