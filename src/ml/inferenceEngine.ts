@@ -2,12 +2,22 @@ import type { TFLiteModel } from "@/src/ml/modelLoader";
 
 const EXPECTED_CHUNK_LENGTH = 160000;
 
+/**
+ * @deprecated Phase 4B.1 introduces the stream-and-discard result type in
+ * src/types/indicators.ts. This Phase 3 shape is kept until the 4B.2
+ * inference refactor removes stored embeddings from the runtime pipeline.
+ */
 export interface ChunkInferenceResult {
   chunkIndex: number;
   inferenceTimeMs: number;
   embeddings: Float32Array;
 }
 
+/**
+ * @deprecated Phase 4B.1 introduces the stream-and-discard result type in
+ * src/types/indicators.ts. This Phase 3 shape is kept until the 4B.2
+ * inference refactor removes stored embeddings from the runtime pipeline.
+ */
 export interface SessionInferenceResult {
   totalChunks: number;
   totalInferenceTimeMs: number;

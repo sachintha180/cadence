@@ -2,7 +2,7 @@ import { loadTensorflowModel } from "react-native-fast-tflite";
 
 export async function loadStubModel() {
   const model = await loadTensorflowModel(
-    require("../../assets/models/stub_wav2vec2.tflite"),
+    require("../../assets/models/encoder_wav2vec2_int8.tflite"),
     [],
   );
 
