@@ -19,6 +19,17 @@ import { formatDateTime, formatDurationMs } from "@/constants/helpers";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
 import { deleteRecordingAsync } from "@/services/recordingDelete";
 
+function logHistoryEvent(event: string, details?: Record<string, unknown>) {
+  console.log(
+    "[history]",
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+    }),
+  );
+}
+
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
@@ -31,13 +42,18 @@ export default function HistoryScreen() {
     async function run() {
       try {
         setLoading(true);
+        logHistoryEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
         if (!cancelled) {
           setSessions(nextSessions);
+          logHistoryEvent("recording_list_load_completed", {
+            count: nextSessions.length,
+          });
         }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Could not load recordings.";
+        logHistoryEvent("recording_list_load_failed", { message });
         showToast({ message, kind: "error" });
       } finally {
         if (!cancelled) {
@@ -58,6 +74,9 @@ export default function HistoryScreen() {
   const total = sessions.length;
 
   function confirmDeleteRecording(session: RecordingSession) {
+    logHistoryEvent("recording_delete_confirm_opened", {
+      sessionId: session.id,
+    });
     Alert.alert(
       "Delete recording?",
       "This will permanently remove the audio file from this device.",
@@ -67,6 +86,9 @@ export default function HistoryScreen() {
           text: "Delete",
           style: "destructive",
           onPress: () => {
+            logHistoryEvent("recording_delete_confirmed", {
+              sessionId: session.id,
+            });
             deleteRecording(session);
           },
         },
@@ -80,10 +102,17 @@ export default function HistoryScreen() {
       setSessions((current) =>
         current.filter((currentSession) => currentSession.id !== session.id),
       );
+      logHistoryEvent("recording_delete_completed", {
+        sessionId: session.id,
+      });
       showToast({ message: "Recording deleted.", kind: "success" });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Could not delete recording.";
+      logHistoryEvent("recording_delete_failed", {
+        sessionId: session.id,
+        message,
+      });
       showToast({ message, kind: "error" });
     }
   }
