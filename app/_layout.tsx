@@ -26,8 +26,8 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: colors.bgBase },
             }}
           >
-            {/* Register the (tabs) route in the stack */}
             <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="import" />
           </Stack>
         </ToastProvider>
       </ModelProvider>
