@@ -10,6 +10,17 @@ import React, {
 
 import { loadModel, type TFLiteModel } from "@/src/ml/modelLoader";
 
+function logModelEvent(event: string, details?: Record<string, unknown>) {
+  console.log(
+    "[model]",
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+    }),
+  );
+}
+
 type ModelState = "loading" | "loaded" | "error";
 
 type ModelContextValue = {
@@ -29,12 +40,14 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
 
   const getModel = useCallback(async () => {
     if (model) {
+      logModelEvent("cached_model_reused");
       return model;
     }
 
     if (!modelPromiseRef.current) {
       setState("loading");
       setError(null);
+      logModelEvent("model_load_started");
       modelPromiseRef.current = loadModel();
     }
 
@@ -42,6 +55,7 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
       const nextModel = await modelPromiseRef.current;
       setModel(nextModel);
       setState("loaded");
+      logModelEvent("model_load_completed");
       return nextModel;
     } catch (nextError) {
       const errorValue =
@@ -52,6 +66,7 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
       setModel(null);
       setState("error");
       modelPromiseRef.current = null;
+      logModelEvent("model_load_failed", { message: errorValue.message });
       throw errorValue;
     }
   }, [model]);
@@ -61,6 +76,7 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
 
     async function load() {
       try {
+        logModelEvent("model_preload_started");
         const nextModel = await getModel();
 
         if (cancelled) {
@@ -69,8 +85,10 @@ export function ModelProvider({ children }: { children: React.ReactNode }) {
 
         setModel(nextModel);
         setState("loaded");
+        logModelEvent("model_preload_completed");
       } catch {
         // getModel owns the error state.
+        logModelEvent("model_preload_failed");
       }
     }
 
