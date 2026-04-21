@@ -1,20 +1,14 @@
 import * as FileSystem from "expo-file-system/legacy";
 import { createAudioPlayer } from "expo-audio";
-import { decodeAudioData } from "react-native-audio-api";
 
 import {
   MIN_VALID_RECORDING_MS,
   RECORDINGS_DIR_NAME,
-  WAV2VEC_SAMPLE_RATE,
 } from "@/constants/recording";
 import { logStorageEvent } from "@/services/storageLog";
 
 export type RecordingFileValidation = {
   fileSizeBytes: number;
-};
-
-export type ImportedRecordingValidation = RecordingFileValidation & {
-  durationMs: number;
 };
 
 const SUPPORTED_IMPORT_EXTENSIONS = new Set(["m4a", "mp4", "wav", "mp3"]);
@@ -147,7 +141,7 @@ export async function validateRecordingFileAsync(
 
 export async function validateImportedRecordingFileAsync(
   audioPath: string,
-): Promise<ImportedRecordingValidation> {
+): Promise<RecordingFileValidation> {
   const info = await FileSystem.getInfoAsync(audioPath);
 
   if (!info.exists) {
@@ -160,22 +154,12 @@ export async function validateImportedRecordingFileAsync(
     throw new Error("Imported file is empty.");
   }
 
-  const audioBuffer = await decodeAudioData(audioPath, WAV2VEC_SAMPLE_RATE);
-  const durationMs = Math.round(
-    (audioBuffer.length / WAV2VEC_SAMPLE_RATE) * 1000,
-  );
-
-  if (durationMs < MIN_VALID_RECORDING_MS) {
-    throw new Error("Recording must be at least 10 seconds.");
-  }
-
   logStorageEvent("import_recording_validated", {
-    details: { durationMs, fileSizeBytes: size },
+    details: { fileSizeBytes: size },
   });
 
   return {
     fileSizeBytes: size,
-    durationMs,
   };
 }
 

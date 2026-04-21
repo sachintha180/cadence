@@ -2,6 +2,7 @@ import { decodeAudioData } from "react-native-audio-api";
 import * as FileSystem from "expo-file-system/legacy";
 
 import {
+  MIN_VALID_RECORDING_MS,
   PREPROCESSED_RECORDINGS_DIR_NAME,
   WAV2VEC_CHUNK_LENGTH,
   WAV2VEC_SAMPLE_RATE,
@@ -12,7 +13,10 @@ import {
   updateAnalysisJobAsync,
 } from "@/services/analysisDb";
 import { logAnalysisEvent } from "@/services/analysisLog";
-import { getRecordingSessionAsync } from "@/services/recordingDb";
+import {
+  getRecordingSessionAsync,
+  updateRecordingSessionAsync,
+} from "@/services/recordingDb";
 
 export type PreprocessForInferenceResult = {
   job: AnalysisJob;
@@ -198,6 +202,14 @@ export async function preprocessRecordingForInferenceAsync(
       WAV2VEC_SAMPLE_RATE,
     );
     const monoSamples = downmixToMono(audioBuffer);
+    const decodedDurationMs = Math.round(
+      (monoSamples.length / WAV2VEC_SAMPLE_RATE) * 1000,
+    );
+
+    if (decodedDurationMs < MIN_VALID_RECORDING_MS) {
+      throw new Error("Recording must be at least 10 seconds.");
+    }
+
     const chunks = chunkSamples(monoSamples);
     const wavBytes = encodePcm16Wav(monoSamples, WAV2VEC_SAMPLE_RATE);
     const outputPath = getPreprocessedRecordingPath(recordingSessionId);
@@ -212,7 +224,7 @@ export async function preprocessRecordingForInferenceAsync(
       path: outputPath,
       sampleRate: WAV2VEC_SAMPLE_RATE,
       channelCount: 1,
-      durationMs: Math.round((monoSamples.length / WAV2VEC_SAMPLE_RATE) * 1000),
+      durationMs: decodedDurationMs,
       frameCount: monoSamples.length,
       fileSizeBytes,
     };
@@ -227,6 +239,10 @@ export async function preprocessRecordingForInferenceAsync(
       processedFileSizeBytes: metadata.fileSizeBytes,
       attemptCount,
       errorMessage: null,
+    });
+    await updateRecordingSessionAsync(recordingSessionId, {
+      durationMs: metadata.durationMs,
+      fileSizeBytes: session.fileSizeBytes,
     });
 
     logAnalysisEvent("preprocessing_completed", {
