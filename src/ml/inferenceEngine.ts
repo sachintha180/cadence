@@ -17,6 +17,7 @@ import type {
 
 const EXPECTED_CHUNK_LENGTH = 160000;
 const CHUNK_DURATION_MS = 10000;
+const EXPECTED_EMBEDDING_LENGTH = 500 * 768;
 
 function getTrueChunkDurationMs(chunkIndex: number, totalDurationMs: number) {
   const remainingDurationMs = totalDurationMs - chunkIndex * CHUNK_DURATION_MS;
@@ -107,7 +108,7 @@ function buildPitchAggregates(
   chunkIndicators: ChunkIndicators[],
 ): SessionPitchAggregates | null {
   const pitchValues = chunkIndicators
-    .map((chunk) => chunk.pitch?.embeddingVariance)
+    .map((chunk) => chunk.pitch?.embeddingStd)
     .filter((value): value is number => typeof value === "number");
 
   if (pitchValues.length === 0) {
@@ -115,9 +116,11 @@ function buildPitchAggregates(
   }
 
   return {
-    pitchVarianceTimeline: pitchValues,
-    meanPitchVariance: mean(pitchValues),
-    pitchVarianceStd: standardDeviation(pitchValues),
+    pitchEmbeddingStdTimeline: pitchValues,
+    meanPitchEmbeddingStd: mean(pitchValues),
+    pitchEmbeddingStdStd: standardDeviation(pitchValues),
+    pitchEmbeddingStdMin: Math.min(...pitchValues),
+    pitchEmbeddingStdMax: Math.max(...pitchValues),
   };
 }
 
@@ -180,10 +183,9 @@ export async function runSessionInference(
     const chunk = chunks[index];
 
     if (chunk.length !== EXPECTED_CHUNK_LENGTH) {
-      console.warn(
-        `[Cadence] Skipping chunk ${index}: expected ${EXPECTED_CHUNK_LENGTH} samples, received ${chunk.length}.`,
+      throw new Error(
+        `Invalid chunk ${index}: expected ${EXPECTED_CHUNK_LENGTH} samples, received ${chunk.length}.`,
       );
-      continue;
     }
 
     const startTime = Date.now();
@@ -198,8 +200,10 @@ export async function runSessionInference(
 
     const embeddings = new Float32Array(output);
 
-    if (embeddings.length === 0) {
-      throw new Error(`Model returned an empty output for chunk ${index}.`);
+    if (embeddings.length !== EXPECTED_EMBEDDING_LENGTH) {
+      throw new Error(
+        `Model returned ${embeddings.length} embedding values for chunk ${index}; expected ${EXPECTED_EMBEDDING_LENGTH}.`,
+      );
     }
 
     const preview = Array.from(embeddings.slice(0, 3)).join(", ");
@@ -228,6 +232,10 @@ export async function runSessionInference(
     inferenceTimes.length > 0
       ? totalInferenceTimeMs / inferenceTimes.length
       : 0;
+  if (chunkIndicators.length === 0) {
+    throw new Error("Inference completed without producing chunk indicators.");
+  }
+
   const sessionIndicators = buildSessionIndicators(sessionId, chunkIndicators);
   await saveSessionIndicators(sessionIndicators);
 

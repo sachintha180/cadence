@@ -8,6 +8,9 @@ const SAMPLE_RATE = 16000;
 const ADAPTIVE_THRESHOLD_MULTIPLIER = 2.5;
 const MIN_SILENCE_THRESHOLD = 0.001;
 const MIN_PAUSE_FRAMES = 8;
+const EMBEDDING_TIME_STEPS = 500;
+const EMBEDDING_DIMENSIONS = 768;
+const EXPECTED_EMBEDDING_LENGTH = EMBEDDING_TIME_STEPS * EMBEDDING_DIMENSIONS;
 
 function computeFrameRms(
   pcmChunk: Float32Array,
@@ -57,6 +60,43 @@ function estimateNoiseFloor(frameRms: number[]) {
   return sorted[Math.min(index, sorted.length - 1)];
 }
 
+function computeEmbeddingStd(embeddings: Float32Array | null) {
+  if (!embeddings) {
+    console.warn("[Cadence] Pitch proxy skipped: embeddings were null.");
+    return null;
+  }
+
+  if (embeddings.length !== EXPECTED_EMBEDDING_LENGTH) {
+    console.warn(
+      `[Cadence] Pitch proxy skipped: expected ${EXPECTED_EMBEDDING_LENGTH} embedding values, received ${embeddings.length}.`,
+    );
+    return null;
+  }
+
+  let totalStd = 0;
+
+  for (let dimension = 0; dimension < EMBEDDING_DIMENSIONS; dimension += 1) {
+    let sum = 0;
+
+    for (let step = 0; step < EMBEDDING_TIME_STEPS; step += 1) {
+      sum += embeddings[step * EMBEDDING_DIMENSIONS + dimension] ?? 0;
+    }
+
+    const average = sum / EMBEDDING_TIME_STEPS;
+    let squaredDeviationSum = 0;
+
+    for (let step = 0; step < EMBEDDING_TIME_STEPS; step += 1) {
+      const value = embeddings[step * EMBEDDING_DIMENSIONS + dimension] ?? 0;
+      const deviation = value - average;
+      squaredDeviationSum += deviation * deviation;
+    }
+
+    totalStd += Math.sqrt(squaredDeviationSum / EMBEDDING_TIME_STEPS);
+  }
+
+  return totalStd / EMBEDDING_DIMENSIONS;
+}
+
 function createSilenceChunk() {
   return new Float32Array(SAMPLE_RATE * 10);
 }
@@ -78,7 +118,7 @@ void createConstantToneChunk;
 export const indicatorExtractionCallback: IndicatorExtractionCallback = (
   chunkIndex,
   pcmChunk,
-  _embeddings,
+  embeddings,
   trueChunkDurationMs,
 ): ChunkIndicators => {
   const realSampleCount = Math.min(
@@ -142,6 +182,7 @@ export const indicatorExtractionCallback: IndicatorExtractionCallback = (
   const speechRatio = frameCount > 0 ? speechFrameCount / frameCount : 0;
   const pauseDurationMs = (pauseFrames * FRAME_SIZE * 1000) / SAMPLE_RATE;
   const longestPauseMs = (longestPauseFrames * FRAME_SIZE * 1000) / SAMPLE_RATE;
+  const embeddingStd = computeEmbeddingStd(embeddings);
 
   return {
     chunkIndex,
@@ -159,7 +200,12 @@ export const indicatorExtractionCallback: IndicatorExtractionCallback = (
       minRms,
       maxRms,
     },
-    pitch: null,
+    pitch:
+      embeddingStd === null
+        ? null
+        : {
+            embeddingStd,
+          },
     speechActivity: {
       speechFrameCount,
       silenceFrameCount,
