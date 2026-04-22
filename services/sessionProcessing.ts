@@ -36,14 +36,6 @@ export async function processRecordingSessionAsync({
     const { job, chunks } =
       await preprocessRecordingForInferenceAsync(sessionId);
 
-    if (job.status !== "preprocessed") {
-      throw new Error(job.errorMessage ?? "Preprocessing failed.");
-    }
-
-    if (chunks.length === 0) {
-      throw new Error("No audio chunks were created for inference.");
-    }
-
     const session = await getRecordingSessionAsync(sessionId);
     const processedDurationMs = job.processedDurationMs ?? session?.durationMs;
 

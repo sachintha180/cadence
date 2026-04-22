@@ -18,6 +18,10 @@ type RecordingSessionRow = {
   updated_at: string;
 };
 
+type TableColumnInfo = {
+  name: string;
+};
+
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 function rowToRecordingSession(row: RecordingSessionRow): RecordingSession {
@@ -32,6 +36,53 @@ function rowToRecordingSession(row: RecordingSessionRow): RecordingSession {
     errorMessage: row.error_message,
     updatedAt: row.updated_at,
   };
+}
+
+async function ensureSessionIndicatorPitchColumnsAsync(
+  db: SQLite.SQLiteDatabase,
+) {
+  const columns = await db.getAllAsync<TableColumnInfo>(
+    "PRAGMA table_info(session_indicators)",
+  );
+  const columnNames = new Set(columns.map((column) => column.name));
+  const pitchColumns = [
+    ["pitch_embedding_std_mean", "REAL"],
+    ["pitch_embedding_std_std", "REAL"],
+    ["pitch_embedding_std_min", "REAL"],
+    ["pitch_embedding_std_max", "REAL"],
+  ] as const;
+
+  for (const [columnName, columnType] of pitchColumns) {
+    if (!columnNames.has(columnName)) {
+      await db.execAsync(
+        `ALTER TABLE session_indicators ADD COLUMN ${columnName} ${columnType};`,
+      );
+    }
+  }
+
+  // Legacy pitch_variance_* columns (from an intermediate build before TYPE-06 rename) are not
+  // dropped because SQLite ALTER TABLE DROP COLUMN requires SQLite 3.35+ which is not guaranteed
+  // across all target Android versions. These four columns remain as an inert schema artefact
+  // (~32 bytes/row) on devices that installed that intermediate build. New installs never create
+  // them and never read them. They should not be used in any query or report.
+  const legacyPitchColumns = [
+    "pitch_variance_mean",
+    "pitch_variance_std",
+    "pitch_variance_min",
+    "pitch_variance_max",
+  ];
+
+  if (legacyPitchColumns.every((columnName) => columnNames.has(columnName))) {
+    await db.execAsync(`
+      UPDATE session_indicators
+      SET pitch_embedding_std_mean = COALESCE(pitch_embedding_std_mean, pitch_variance_mean),
+          pitch_embedding_std_std = COALESCE(pitch_embedding_std_std, pitch_variance_std),
+          pitch_embedding_std_min = COALESCE(pitch_embedding_std_min, pitch_variance_min),
+          pitch_embedding_std_max = COALESCE(pitch_embedding_std_max, pitch_variance_max)
+      WHERE pitch_embedding_std_mean IS NULL
+        AND pitch_variance_mean IS NOT NULL;
+    `);
+  }
 }
 
 export async function getRecordingDbAsync() {
@@ -113,11 +164,17 @@ export async function getRecordingDbAsync() {
           mean_pauses_per_chunk REAL NOT NULL,
           session_speech_ratio REAL NOT NULL,
           mean_chunk_speech_ratio REAL NOT NULL,
+          pitch_embedding_std_mean REAL,
+          pitch_embedding_std_std REAL,
+          pitch_embedding_std_min REAL,
+          pitch_embedding_std_max REAL,
           FOREIGN KEY (session_id)
             REFERENCES recording_sessions(id)
             ON DELETE CASCADE
         );
       `);
+
+      await ensureSessionIndicatorPitchColumnsAsync(db);
 
       logDbEvent("database_initialized");
 
@@ -244,12 +301,6 @@ export async function listRecordingSessionsAsync() {
   });
 
   return rows.map(rowToRecordingSession);
-}
-
-export async function deleteRecordingSessionAsync(id: string) {
-  const db = await getRecordingDbAsync();
-  await db.runAsync("DELETE FROM recording_sessions WHERE id = ?", id);
-  logDbEvent("recording_session_deleted", { sessionId: id });
 }
 
 export async function deleteRecordingRowsAsync(id: string) {
