@@ -40,6 +40,10 @@ export type SessionIndicatorRow = {
   mean_pauses_per_chunk: number;
   session_speech_ratio: number;
   mean_chunk_speech_ratio: number;
+  pitch_embedding_std_mean: number | null;
+  pitch_embedding_std_std: number | null;
+  pitch_embedding_std_min: number | null;
+  pitch_embedding_std_max: number | null;
 };
 
 export type IndicatorRowsForSession = {
@@ -155,8 +159,12 @@ export async function saveSessionIndicators(
           longest_pause_ms,
           mean_pauses_per_chunk,
           session_speech_ratio,
-          mean_chunk_speech_ratio
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          mean_chunk_speech_ratio,
+          pitch_embedding_std_mean,
+          pitch_embedding_std_std,
+          pitch_embedding_std_min,
+          pitch_embedding_std_max
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         indicators.sessionId,
         indicators.totalChunks,
         indicators.sessionDurationMs,
@@ -173,6 +181,10 @@ export async function saveSessionIndicators(
           : 0,
         indicators.speechActivity.teacherSpeechActivityRatio,
         mean(chunkSpeechRatios),
+        indicators.pitch?.meanPitchEmbeddingStd ?? null,
+        indicators.pitch?.pitchEmbeddingStdStd ?? null,
+        indicators.pitch?.pitchEmbeddingStdMin ?? null,
+        indicators.pitch?.pitchEmbeddingStdMax ?? null,
       );
 
       await db.runAsync(
