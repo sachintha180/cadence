@@ -48,3 +48,6 @@ notes/
 
 # Models
 models/
+
+# Temporary
+tmp/
