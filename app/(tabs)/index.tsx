@@ -47,10 +47,13 @@ export default function HomeScreen() {
         logHomeEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
         const analysisJobs = await Promise.all(
-          nextSessions.map(async (session) => [
-            session.id,
-            await getAnalysisJobForRecordingAsync(session.id),
-          ] as const),
+          nextSessions.map(
+            async (session) =>
+              [
+                session.id,
+                await getAnalysisJobForRecordingAsync(session.id),
+              ] as const,
+          ),
         );
         if (!cancelled) {
           setSessions(nextSessions);
@@ -101,7 +104,7 @@ export default function HomeScreen() {
       >
         <View style={styles.hero}>
           <Text style={styles.wordmark}>CADENCE</Text>
-          <Text style={styles.greeting}>{"Good morning,\nMr Sachintha."}</Text>
+          <Text style={styles.greeting}>{"Welcome,\nMr Sachintha."}</Text>
           <Text style={styles.heroMeta}>
             {sessions.length} recordings saved locally
           </Text>
