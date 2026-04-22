@@ -32,10 +32,9 @@ export type ChunkEnergyIndicators = {
 
 export type ChunkPitchIndicators = {
   /**
-   * Mean standard deviation across embedding dimensions over time. Null at the
-   * chunk composite level during Phase 4B because the real model is pending.
+   * Mean temporal standard deviation across embedding dimensions.
    */
-  embeddingVariance: number;
+  embeddingStd: number;
 };
 
 export type ChunkSpeechActivityIndicators = {
@@ -91,12 +90,16 @@ export type SessionEnergyAggregates = {
 };
 
 export type SessionPitchAggregates = {
-  /** Per-chunk embedding variance values, ordered by chunkIndex. */
-  pitchVarianceTimeline: number[];
-  /** Mean embedding variance across the session. */
-  meanPitchVariance: number;
-  /** Standard deviation of per-chunk embedding variance across the session. */
-  pitchVarianceStd: number;
+  /** Per-chunk embedding standard deviation values, ordered by chunkIndex. */
+  pitchEmbeddingStdTimeline: number[];
+  /** Mean embedding standard deviation across the session. */
+  meanPitchEmbeddingStd: number;
+  /** Standard deviation of per-chunk embedding standard deviation across the session. */
+  pitchEmbeddingStdStd: number;
+  /** Minimum per-chunk embedding standard deviation across the session. */
+  pitchEmbeddingStdMin: number;
+  /** Maximum per-chunk embedding standard deviation across the session. */
+  pitchEmbeddingStdMax: number;
 };
 
 export type SessionSpeechActivityAggregates = {
