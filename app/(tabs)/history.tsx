@@ -218,6 +218,8 @@ export default function HistoryScreen() {
                           styles.deleteButton,
                           { opacity: pressed ? 0.65 : 1 },
                         ]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete ${session.title ?? "recording"}`}
                         onPress={(event) => {
                           event.stopPropagation();
                           confirmDeleteRecording(session);

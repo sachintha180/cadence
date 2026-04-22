@@ -1,5 +1,12 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
+import {
+  ActivityIndicator,
+  View,
+  Text,
+  ScrollView,
+  Pressable,
+  StyleSheet,
+} from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -29,12 +36,14 @@ export default function HomeScreen() {
   const [analysisJobsBySessionId, setAnalysisJobsBySessionId] = useState<
     Record<string, AnalysisJob | null>
   >({});
+  const [loading, setLoading] = useState(true);
 
   const loadSessions = useCallback(() => {
     let cancelled = false;
 
     async function run() {
       try {
+        setLoading(true);
         logHomeEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
         const analysisJobs = await Promise.all(
@@ -58,6 +67,10 @@ export default function HomeScreen() {
           error instanceof Error ? error.message : "Could not load recordings.";
         logHomeEvent("recording_list_load_failed", { message });
         showToast({ message, kind: "error" });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
 
@@ -179,7 +192,14 @@ export default function HomeScreen() {
               );
             })}
 
-            {sessions.length === 0 && (
+            {loading && sessions.length === 0 && (
+              <View style={styles.emptyCard}>
+                <ActivityIndicator color={colors.accent} />
+                <Text style={styles.emptyText}>Loading recordings...</Text>
+              </View>
+            )}
+
+            {!loading && sessions.length === 0 && (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyText}>
                   Your real recordings will appear here.

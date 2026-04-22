@@ -61,10 +61,16 @@ function formatMetric(value: number) {
 type ProcessActionProps = {
   disabled: boolean;
   label: string;
+  accessibilityLabel: string;
   onPress: () => void;
 };
 
-function ProcessAction({ disabled, label, onPress }: ProcessActionProps) {
+function ProcessAction({
+  disabled,
+  label,
+  accessibilityLabel,
+  onPress,
+}: ProcessActionProps) {
   return (
     <Pressable
       style={({ pressed }) => [
@@ -72,6 +78,8 @@ function ProcessAction({ disabled, label, onPress }: ProcessActionProps) {
         { opacity: disabled ? 0.5 : pressed ? 0.85 : 1 },
       ]}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       onPress={onPress}
     >
       <MaterialCommunityIcons
@@ -107,7 +115,9 @@ export default function ResultsScreen() {
         setLoading(true);
         logResultsEvent("results_load_started", { sessionId: id });
         const nextSession = id ? await getRecordingSessionAsync(id) : null;
-        const analysisJob = id ? await getAnalysisJobForRecordingAsync(id) : null;
+        const analysisJob = id
+          ? await getAnalysisJobForRecordingAsync(id)
+          : null;
         const indicatorRows = id
           ? await getIndicatorRowsForSession(id)
           : { sessionIndicators: null, chunkIndicators: [] };
@@ -197,7 +207,9 @@ export default function ResultsScreen() {
           });
         },
         onInferenceProgress: (chunkIndex, total) => {
-          setProcessingLabel(`Running inference ${chunkIndex}/${total} chunks...`);
+          setProcessingLabel(
+            `Running inference ${chunkIndex}/${total} chunks...`,
+          );
           logResultsEvent("results_processing_progress", {
             sessionId: session.id,
             chunkIndex,
@@ -298,10 +310,10 @@ export default function ResultsScreen() {
                   isProcessing
                     ? styles.processingBadge
                     : analysed
-                    ? styles.analysedBadge
-                    : processingFailed
-                      ? styles.failedBadge
-                      : styles.pendingBadge,
+                      ? styles.analysedBadge
+                      : processingFailed
+                        ? styles.failedBadge
+                        : styles.pendingBadge,
                 ]}
               >
                 <Text
@@ -310,19 +322,19 @@ export default function ResultsScreen() {
                     isProcessing
                       ? styles.processingBadgeText
                       : analysed
-                      ? styles.analysedBadgeText
-                      : processingFailed
-                        ? styles.failedBadgeText
-                      : styles.pendingBadgeText,
+                        ? styles.analysedBadgeText
+                        : processingFailed
+                          ? styles.failedBadgeText
+                          : styles.pendingBadgeText,
                   ]}
                 >
                   {isProcessing
                     ? "Processing"
                     : analysed
-                    ? "Analysed"
-                    : processingFailed
-                      ? "Processing failed"
-                      : "Not yet analysed"}
+                      ? "Analysed"
+                      : processingFailed
+                        ? "Processing failed"
+                        : "Not yet analysed"}
                 </Text>
               </View>
             </View>
@@ -349,12 +361,13 @@ export default function ResultsScreen() {
               />
               <Text style={styles.cardTitle}>Processing failed</Text>
               <Text style={styles.cardBody}>
-                The recording is still saved locally and ready to process
-                again. {analysisJob.errorMessage ?? "No error detail was saved."}
+                The recording is still saved locally and ready to process again.{" "}
+                {analysisJob.errorMessage ?? "No error detail was saved."}
               </Text>
               <ProcessAction
                 disabled={!canProcess}
                 label={isProcessing ? processingLabel : processButtonLabel}
+                accessibilityLabel={processButtonLabel}
                 onPress={processFromResults}
               />
             </View>
@@ -375,6 +388,7 @@ export default function ResultsScreen() {
               <ProcessAction
                 disabled={!canProcess}
                 label={isProcessing ? processingLabel : processButtonLabel}
+                accessibilityLabel={processButtonLabel}
                 onPress={processFromResults}
               />
             </View>
@@ -472,14 +486,43 @@ export default function ResultsScreen() {
             </>
           )}
 
-          <View style={[styles.card, styles.disabledCard]}>
-            <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
-            <Text style={styles.disabledTitle}>Coming in next update</Text>
-            <Text style={styles.cardBody}>
-              Embedding-derived pitch variation is planned for the next
-              indicator phase.
-            </Text>
-          </View>
+          {sessionIndicators?.pitch_embedding_std_mean !== null &&
+          sessionIndicators?.pitch_embedding_std_mean !== undefined ? (
+            <View style={styles.card}>
+              <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
+              <View style={styles.metricGrid}>
+                <View style={styles.metricBlock}>
+                  <Text style={styles.metricValue}>
+                    {formatMetric(sessionIndicators.pitch_embedding_std_mean)}
+                  </Text>
+                  <Text style={styles.metricLabel}>Embedding std</Text>
+                </View>
+                <View style={styles.metricBlock}>
+                  <Text style={styles.metricValue}>
+                    {sessionIndicators.pitch_embedding_std_std === null
+                      ? "N/A"
+                      : formatMetric(sessionIndicators.pitch_embedding_std_std)}
+                  </Text>
+                  <Text style={styles.metricLabel}>
+                    Between-chunk std (lower = more consistent)
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.cardBody}>
+                Derived from Wav2Vec2 embedding standard deviation. Higher
+                values indicate more varied vocal delivery.
+              </Text>
+            </View>
+          ) : (
+            <View style={[styles.card, styles.disabledCard]}>
+              <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
+              <Text style={styles.disabledTitle}>Coming in next update</Text>
+              <Text style={styles.cardBody}>
+                Embedding-derived pitch variation is planned for the next
+                indicator phase.
+              </Text>
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>

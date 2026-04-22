@@ -22,6 +22,8 @@ import * as Crypto from "expo-crypto";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { useFocusEffect } from "expo-router";
+
 import { useModel } from "@/components/ModelProvider";
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
@@ -314,6 +316,27 @@ export default function RecordScreen() {
     };
   }, [audioRecorder]);
 
+  // Re-sync analysis job status from DB whenever the screen comes back into focus.
+  // Covers the case where inference completes while the user is on another tab and the
+  // screen needs to reflect the DB state on return.
+  useFocusEffect(
+    useCallback(() => {
+      if (
+        activeSession === null ||
+        recorderState === "recording" ||
+        recorderState === "stopping" ||
+        recorderState === "validating" ||
+        isPreprocessing
+      ) {
+        return;
+      }
+
+      getAnalysisJobForRecordingAsync(activeSession.id)
+        .then((job) => setAnalysisJob(job))
+        .catch(() => {});
+    }, [activeSession, recorderState, isPreprocessing]),
+  );
+
   async function requestRecordingPermission() {
     setRecorderState("requesting_permission");
     logRecorderEvent("permission_requested");
@@ -499,18 +522,12 @@ export default function RecordScreen() {
             setProcessingLabel("Running inference...");
           }
         },
+        onInferenceProgress: (chunkIndex, total) => {
+          setProcessingLabel(`Running inference ${chunkIndex}/${total} chunks...`);
+        },
       });
       setInferenceResult(nextInferenceResult);
       await loadAnalysisJob(activeSession.id);
-
-      console.log(
-        `[Cadence] Session inference complete: ${nextInferenceResult.totalChunks} chunks, ${nextInferenceResult.totalInferenceTimeMs}ms total, ${nextInferenceResult.averageChunkTimeMs}ms avg per chunk`,
-      );
-
-      await updateRecordingSessionAsync(activeSession.id, {
-        status: "completed",
-        errorMessage: null,
-      });
 
       const completedSession: RecordingSession = {
         ...activeSession,
@@ -706,10 +723,7 @@ export default function RecordScreen() {
                   {analysisJob.status === "preprocessed" && (
                     <Text style={styles.analysisText}>
                       {analysisJob.processedSampleRate} Hz mono -{" "}
-                      {Math.round(
-                        (analysisJob.processedFileSizeBytes ?? 0) / 1024,
-                      )}{" "}
-                      KB
+                      {formatDurationMs(analysisJob.processedDurationMs ?? 0)}
                     </Text>
                   )}
                   {inferenceResult && (
