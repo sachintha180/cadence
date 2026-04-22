@@ -1,5 +1,12 @@
 import React, { useCallback, useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet } from "react-native";
+import {
+  Alert,
+  View,
+  Text,
+  ScrollView,
+  Pressable,
+  StyleSheet,
+} from "react-native";
 import { router, useFocusEffect } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -7,14 +14,30 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Pill from "@/components/Pill";
 import { useToast } from "@/components/ToastProvider";
 import colors from "@/constants/colors";
-import type { RecordingSession } from "@/constants/types";
+import type { AnalysisJob, RecordingSession } from "@/constants/types";
 import { formatDateTime, formatDurationMs } from "@/constants/helpers";
 import { listRecordingSessionsAsync } from "@/services/recordingDb";
+import { deleteRecordingAsync } from "@/services/recordingDelete";
+import { getAnalysisJobForRecordingAsync } from "@/services/analysisDb";
+
+function logHistoryEvent(event: string, details?: Record<string, unknown>) {
+  console.log(
+    "[history]",
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      details,
+    }),
+  );
+}
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
   const [sessions, setSessions] = useState<RecordingSession[]>([]);
+  const [analysisJobsBySessionId, setAnalysisJobsBySessionId] = useState<
+    Record<string, AnalysisJob | null>
+  >({});
   const [loading, setLoading] = useState(true);
 
   const loadSessions = useCallback(() => {
@@ -23,13 +46,28 @@ export default function HistoryScreen() {
     async function run() {
       try {
         setLoading(true);
+        logHistoryEvent("recording_list_load_started");
         const nextSessions = await listRecordingSessionsAsync();
+        const analysisJobs = await Promise.all(
+          nextSessions.map(async (session) => [
+            session.id,
+            await getAnalysisJobForRecordingAsync(session.id),
+          ] as const),
+        );
         if (!cancelled) {
           setSessions(nextSessions);
+          setAnalysisJobsBySessionId(Object.fromEntries(analysisJobs));
+          logHistoryEvent("recording_list_load_completed", {
+            count: nextSessions.length,
+            failedAnalysisCount: analysisJobs.filter(
+              ([, job]) => job?.status === "failed",
+            ).length,
+          });
         }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Could not load recordings.";
+        logHistoryEvent("recording_list_load_failed", { message });
         showToast({ message, kind: "error" });
       } finally {
         if (!cancelled) {
@@ -48,6 +86,55 @@ export default function HistoryScreen() {
   useFocusEffect(loadSessions);
 
   const total = sessions.length;
+
+  function confirmDeleteRecording(session: RecordingSession) {
+    logHistoryEvent("recording_delete_confirm_opened", {
+      sessionId: session.id,
+    });
+    Alert.alert(
+      "Delete recording?",
+      "This will permanently remove the audio file from this device.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            logHistoryEvent("recording_delete_confirmed", {
+              sessionId: session.id,
+            });
+            deleteRecording(session);
+          },
+        },
+      ],
+    );
+  }
+
+  async function deleteRecording(session: RecordingSession) {
+    try {
+      await deleteRecordingAsync(session);
+      setSessions((current) =>
+        current.filter((currentSession) => currentSession.id !== session.id),
+      );
+      setAnalysisJobsBySessionId((current) => {
+        const next = { ...current };
+        delete next[session.id];
+        return next;
+      });
+      logHistoryEvent("recording_delete_completed", {
+        sessionId: session.id,
+      });
+      showToast({ message: "Recording deleted.", kind: "success" });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Could not delete recording.";
+      logHistoryEvent("recording_delete_failed", {
+        sessionId: session.id,
+        message,
+      });
+      showToast({ message, kind: "error" });
+    }
+  }
 
   return (
     <View style={styles.container}>
@@ -78,48 +165,82 @@ export default function HistoryScreen() {
           </View>
         ) : (
           <View style={styles.list}>
-            {sessions.map((session, index) => (
-              <Pressable
-                key={session.id}
-                style={({ pressed }) => [
-                  styles.card,
-                  { opacity: pressed ? 0.75 : 1 },
-                ]}
-                onPress={() => router.push(`/results/${session.id}`)}
-              >
-                <View style={styles.row}>
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>#{total - index}</Text>
-                  </View>
+            {sessions.map((session, index) => {
+              const analysisJob = analysisJobsBySessionId[session.id];
+              const failedAnalysis = analysisJob?.status === "failed";
 
-                  <View style={styles.content}>
-                    <Text style={styles.sessionTitle}>
-                      {session.title ?? "Recording"}
-                    </Text>
-                    <Text style={styles.meta}>
-                      {formatDateTime(session.createdAt)} -{" "}
-                      {formatDurationMs(session.durationMs)}
-                    </Text>
-                    <View style={styles.pills}>
-                      <Pill color={statusColor(session.status)}>
-                        {session.status.toUpperCase()}
-                      </Pill>
-                      {session.fileSizeBytes !== null && (
-                        <Pill color={colors.statusNeutral}>
-                          {Math.round(session.fileSizeBytes / 1024)} KB
+              return (
+                <Pressable
+                  key={session.id}
+                  style={({ pressed }) => [
+                    styles.card,
+                    { opacity: pressed ? 0.75 : 1 },
+                  ]}
+                  onPress={() => router.push(`/results/${session.id}`)}
+                >
+                  <View style={styles.row}>
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>#{total - index}</Text>
+                    </View>
+
+                    <View style={styles.content}>
+                      <Text style={styles.sessionTitle}>
+                        {session.title ?? "Recording"}
+                      </Text>
+                      <Text style={styles.meta}>
+                        {formatDateTime(session.createdAt)} -{" "}
+                        {formatDurationMs(session.durationMs)}
+                      </Text>
+                      <View style={styles.pills}>
+                        <Pill
+                          color={
+                            failedAnalysis
+                              ? colors.danger
+                              : statusColor(session.status)
+                          }
+                        >
+                          {failedAnalysis
+                            ? "PROCESSING FAILED"
+                            : session.status.toUpperCase()}
                         </Pill>
-                      )}
+                        {session.fileSizeBytes !== null && (
+                          <Pill color={colors.statusNeutral}>
+                            {Math.round(session.fileSizeBytes / 1024)} KB
+                          </Pill>
+                        )}
+                      </View>
+                    </View>
+
+                    <View style={styles.actions}>
+                      <Pressable
+                        hitSlop={10}
+                        style={({ pressed }) => [
+                          styles.deleteButton,
+                          { opacity: pressed ? 0.65 : 1 },
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Delete ${session.title ?? "recording"}`}
+                        onPress={(event) => {
+                          event.stopPropagation();
+                          confirmDeleteRecording(session);
+                        }}
+                      >
+                        <MaterialCommunityIcons
+                          name="trash-can-outline"
+                          size={20}
+                          color={colors.danger}
+                        />
+                      </Pressable>
+                      <MaterialCommunityIcons
+                        name="chevron-right"
+                        size={20}
+                        color={colors.white20}
+                      />
                     </View>
                   </View>
-
-                  <MaterialCommunityIcons
-                    name="chevron-right"
-                    size={20}
-                    color={colors.white20}
-                  />
-                </View>
-              </Pressable>
-            ))}
+                </Pressable>
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -131,8 +252,6 @@ function statusColor(status: RecordingSession["status"]) {
   switch (status) {
     case "ready":
       return colors.statusGood;
-    case "failed":
-      return colors.danger;
     case "completed":
       return colors.accent;
     default:
@@ -216,6 +335,21 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: "wrap",
     marginTop: 10,
+  },
+  actions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  deleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.dangerBg,
+    borderWidth: 1,
+    borderColor: colors.dangerBorder,
   },
   emptyCard: {
     marginHorizontal: 24,

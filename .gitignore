@@ -45,3 +45,9 @@ yarn-error.*
 
 # Notes
 notes/
+
+# Models
+models/
+
+# Temporary
+tmp/

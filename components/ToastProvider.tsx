@@ -105,6 +105,7 @@ const styles = StyleSheet.create({
     left: 16,
     right: 16,
     zIndex: 99,
+    alignItems: "center",
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.cardBorder,
@@ -116,6 +117,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     color: colors.white,
+    textAlign: "center",
   },
   info: {
     color: colors.white,
@@ -130,6 +132,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     color: colors.accent,
+    textAlign: "center",
     marginTop: 8,
   },
 });
