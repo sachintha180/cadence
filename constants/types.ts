@@ -39,12 +39,12 @@ export type AnalysisJob = {
 };
 
 export type PreprocessedAudioMetadata = {
-  path: string;
+  path: string | null;
   sampleRate: number;
   channelCount: number;
   durationMs: number;
   frameCount: number;
-  fileSizeBytes: number;
+  fileSizeBytes: number | null;
 };
 
 export type RecorderState =
