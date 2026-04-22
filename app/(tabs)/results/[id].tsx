@@ -22,6 +22,13 @@ import {
   type ChunkIndicatorRow,
   type SessionIndicatorRow,
 } from "@/src/db/indicatorRepository";
+import {
+  generateSessionSummary,
+  interpretEnergyConsistency,
+  interpretPauseFrequency,
+  interpretProsody,
+  interpretSpeechActivity,
+} from "@/src/utils/indicatorInterpreter";
 import { getRecordingSessionAsync } from "@/services/recordingDb";
 import {
   processRecordingSessionAsync,
@@ -45,6 +52,9 @@ type ResultsState = {
   sessionIndicators: SessionIndicatorRow | null;
   chunkIndicators: ChunkIndicatorRow[];
 };
+
+const INDICATOR_DISCLAIMER =
+  "Indicators are derived from acoustic signal analysis. Speech activity and pause detection use amplitude-based voice activity detection. Prosody proxy is derived from Wav2Vec2 embedding dispersion and does not represent true pitch in Hz. Thresholds are calibrated on a single-teacher corpus and may vary across speakers and environments.";
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
@@ -271,6 +281,15 @@ export default function ResultsScreen() {
   const processButtonLabel = processingFailed
     ? "Retry Processing"
     : "Process Recording";
+  const pitchEmbeddingStd = sessionIndicators?.pitch_embedding_std_mean ?? null;
+  const sessionSummary = sessionIndicators
+    ? generateSessionSummary({
+        speechRatio: sessionIndicators.session_speech_ratio,
+        stdRms: sessionIndicators.mean_rms_std,
+        meanPausesPerChunk: sessionIndicators.mean_pauses_per_chunk,
+        embeddingStd: pitchEmbeddingStd,
+      })
+    : null;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -301,7 +320,7 @@ export default function ResultsScreen() {
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <View>
-                <Text style={styles.sectionEyebrow}>Session Summary</Text>
+                <Text style={styles.sectionEyebrow}>Analysis Status</Text>
                 <Text style={styles.cardTitle}>Analysis Results</Text>
               </View>
               <View
@@ -396,6 +415,11 @@ export default function ResultsScreen() {
 
           {sessionIndicators && (
             <>
+              <View style={[styles.card, styles.summaryCard]}>
+                <Text style={styles.sectionEyebrow}>Session Summary</Text>
+                <Text style={styles.summaryText}>{sessionSummary}</Text>
+              </View>
+
               <View style={styles.card}>
                 <Text style={styles.sectionEyebrow}>Speech Activity</Text>
                 <Text style={styles.bigMetric}>
@@ -418,6 +442,11 @@ export default function ResultsScreen() {
                     ]}
                   />
                 </View>
+                <Text style={styles.interpretationText}>
+                  {interpretSpeechActivity(
+                    sessionIndicators.session_speech_ratio,
+                  )}
+                </Text>
               </View>
 
               <View style={styles.card}>
@@ -438,21 +467,30 @@ export default function ResultsScreen() {
                     </Text>
                   </View>
                 </View>
+                <Text style={styles.interpretationText}>
+                  {interpretEnergyConsistency(sessionIndicators.mean_rms_std)}
+                </Text>
                 <View style={styles.energyChart}>
-                  {chunkIndicators.map((chunk) => {
-                    const height =
-                      maxChunkRms > 0
-                        ? Math.max(8, (chunk.mean_rms / maxChunkRms) * 86)
-                        : 8;
-                    return (
-                      <View
-                        key={`${chunk.session_id}-${chunk.chunk_index}`}
-                        style={styles.energyBarSlot}
-                      >
-                        <View style={[styles.energyBar, { height }]} />
-                      </View>
-                    );
-                  })}
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.energyChartContent}
+                  >
+                    {chunkIndicators.map((chunk) => {
+                      const height =
+                        maxChunkRms > 0
+                          ? Math.max(8, (chunk.mean_rms / maxChunkRms) * 86)
+                          : 8;
+                      return (
+                        <View
+                          key={`${chunk.session_id}-${chunk.chunk_index}`}
+                          style={styles.energyBarSlot}
+                        >
+                          <View style={[styles.energyBar, { height }]} />
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
                 </View>
               </View>
 
@@ -482,46 +520,63 @@ export default function ResultsScreen() {
                     {sessionIndicators.mean_pauses_per_chunk.toFixed(2)}
                   </Text>
                 </View>
+                <Text style={styles.interpretationText}>
+                  {interpretPauseFrequency(
+                    sessionIndicators.mean_pauses_per_chunk,
+                  )}
+                </Text>
               </View>
             </>
           )}
 
-          {sessionIndicators?.pitch_embedding_std_mean !== null &&
-          sessionIndicators?.pitch_embedding_std_mean !== undefined ? (
-            <View style={styles.card}>
-              <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
-              <View style={styles.metricGrid}>
-                <View style={styles.metricBlock}>
-                  <Text style={styles.metricValue}>
-                    {formatMetric(sessionIndicators.pitch_embedding_std_mean)}
+          {sessionIndicators && (
+            <>
+              {pitchEmbeddingStd !== null ? (
+                <View style={styles.card}>
+                  <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
+                  <View style={styles.metricGrid}>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricValue}>
+                        {formatMetric(pitchEmbeddingStd)}
+                      </Text>
+                      <Text style={styles.metricLabel}>Embedding std</Text>
+                    </View>
+                    <View style={styles.metricBlock}>
+                      <Text style={styles.metricValue}>
+                        {sessionIndicators.pitch_embedding_std_std === null
+                          ? "N/A"
+                          : formatMetric(
+                              sessionIndicators.pitch_embedding_std_std,
+                            )}
+                      </Text>
+                      <Text style={styles.metricLabel}>
+                        Between-chunk std (lower = more consistent)
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.interpretationText}>
+                    {interpretProsody(pitchEmbeddingStd)}
                   </Text>
-                  <Text style={styles.metricLabel}>Embedding std</Text>
+                  <Text style={styles.cardBody}>
+                    Derived from Wav2Vec2 embedding standard deviation. Higher
+                    values indicate more varied vocal delivery.
+                  </Text>
                 </View>
-                <View style={styles.metricBlock}>
-                  <Text style={styles.metricValue}>
-                    {sessionIndicators.pitch_embedding_std_std === null
-                      ? "N/A"
-                      : formatMetric(sessionIndicators.pitch_embedding_std_std)}
+              ) : (
+                <View style={[styles.card, styles.disabledCard]}>
+                  <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
+                  <Text style={styles.disabledTitle}>
+                    Coming in next update
                   </Text>
-                  <Text style={styles.metricLabel}>
-                    Between-chunk std (lower = more consistent)
+                  <Text style={styles.cardBody}>
+                    Embedding-derived pitch variation is planned for the next
+                    indicator phase.
                   </Text>
                 </View>
-              </View>
-              <Text style={styles.cardBody}>
-                Derived from Wav2Vec2 embedding standard deviation. Higher
-                values indicate more varied vocal delivery.
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.card, styles.disabledCard]}>
-              <Text style={styles.sectionEyebrow}>Pitch Variation</Text>
-              <Text style={styles.disabledTitle}>Coming in next update</Text>
-              <Text style={styles.cardBody}>
-                Embedding-derived pitch variation is planned for the next
-                indicator phase.
-              </Text>
-            </View>
+              )}
+
+              <Text style={styles.disclaimerText}>{INDICATOR_DISCLAIMER}</Text>
+            </>
           )}
         </View>
       </ScrollView>
@@ -604,6 +659,10 @@ const styles = StyleSheet.create({
   disabledCard: {
     opacity: 0.72,
   },
+  summaryCard: {
+    backgroundColor: colors.accentBgSubtle,
+    borderColor: colors.accentBorder,
+  },
   cardHeaderRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -631,6 +690,24 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.white50,
     marginTop: 8,
+  },
+  summaryText: {
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  interpretationText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.white82,
+    marginTop: 14,
+  },
+  disclaimerText: {
+    fontSize: 11,
+    lineHeight: 17,
+    color: colors.white40,
+    paddingHorizontal: 4,
   },
   statusBadge: {
     borderRadius: 999,
@@ -750,17 +827,20 @@ const styles = StyleSheet.create({
   },
   energyChart: {
     height: 110,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 3,
     borderTopWidth: 1,
     borderTopColor: colors.cardBorder,
     marginTop: 18,
     paddingTop: 14,
+    overflow: "hidden",
+  },
+  energyChartContent: {
+    minWidth: "100%",
+    alignItems: "flex-end",
+    gap: 3,
   },
   energyBarSlot: {
-    flex: 1,
-    minWidth: 3,
+    width: 4,
+    height: 86,
     justifyContent: "flex-end",
   },
   energyBar: {
