@@ -35,17 +35,80 @@ npm test           # Jest unit tests
 
 ## Project Structure
 
-See [`notes/DIRECTORY.md`](notes/DIRECTORY.md) for a full annotated file tree.
-
-Key directories:
-
-- `app/` - screens and navigation (Expo Router)
-- `components/` - shared UI components
-- `services/` - data access and business logic
-- `src/` - core ML inference and indicator logic
-- `notebooks/` - Python/Jupyter ML pipeline development
-- `scripts/` - utility scripts (e.g. SQLite WAL merging)
-- `notes/` - project documentation and phase planning
+```
+cadence/
+├── app/                        # Expo Router screens and navigation layout
+│   ├── (tabs)/                 # Tab-based navigation group
+│   │   ├── _layout.tsx         # Tab navigator configuration
+│   │   ├── index.tsx           # Home screen
+│   │   ├── history.tsx         # Recording history screen
+│   │   ├── record.tsx          # Recording screen
+│   │   └── results/
+│   │       └── [id].tsx        # Dynamic results screen (per recording)
+│   ├── _layout.tsx             # Root app layout
+│   └── import.tsx              # File import screen
+│
+├── assets/
+│   └── images/                 # App icons and splash screen images
+│
+├── components/                 # Shared React Native UI components
+│   ├── ModelProvider.tsx       # Context provider for ML model state
+│   ├── Pill.tsx                # Pill/badge UI component
+│   └── ToastProvider.tsx       # Toast notification context provider
+│
+├── constants/                  # App-wide constants and shared types
+│   ├── colors.ts               # Color palette
+│   ├── helpers.ts              # General utility/helper functions
+│   ├── recording.ts            # Recording-related constants
+│   └── types.ts                # Shared TypeScript types
+│
+├── notebooks/                                       # Jupyter notebooks for ML pipeline development
+│   ├── encoder_pipeline.ipynb                       # Audio encoder experimentation
+│   ├── eval_pipeline.ipynb                          # Model evaluation pipeline
+│   ├── preprocessing_pipeline_random_samples.ipynb  # Preprocessing experiments
+│   └── stub_pipeline.ipynb                          # Stub/baseline pipeline
+│
+├── scripts/                    # Standalone utility scripts
+│   └── merge_wal.py            # Merges SQLite WAL files into the main DB
+│
+├── services/                   # Data access and business logic services
+│   ├── analysisDb.ts           # Analysis results database operations
+│   ├── analysisLog.ts          # Analysis event logging
+│   ├── audioPreprocessing.ts   # Audio preprocessing utilities
+│   ├── dbLog.ts                # General database logging
+│   ├── importLog.ts            # Import event logging
+│   ├── recordingDb.ts          # Recording database operations
+│   ├── recordingDelete.ts      # Recording deletion logic
+│   ├── recordingFiles.ts       # Recording file management
+│   ├── recordingLog.ts         # Recording event logging
+│   ├── sessionProcessing.ts    # Session-level processing orchestration
+│   └── storageLog.ts           # Storage event logging
+│
+├── src/                                    # Core ML and indicator logic
+│   ├── constants/
+│   │   └── vadConfig.ts                    # Voice activity detection configuration
+│   ├── db/
+│   │   └── indicatorRepository.ts          # Indicator data persistence
+│   ├── ml/                                 # ML inference and model management
+│   │   ├── __tests__/
+│   │   │   └── indicatorExtractor.test.ts  # Unit tests for indicator extractor
+│   │   ├── indicatorExtractor.ts           # Extracts indicators from model output
+│   │   ├── inferenceEngine.ts              # Runs ML inference on audio features
+│   │   └── modelLoader.ts                  # Loads and manages ONNX/TFLite models
+│   ├── types/
+│   │   └── indicators.ts                   # TypeScript types for indicator data
+│   └── utils/
+│       └── indicatorInterpreter.ts         # Interprets and scores indicator values
+│
+├── .gitignore
+├── .python-version             # Python version pin (for notebooks/scripts)
+├── app.json                    # Expo app configuration
+├── index.ts                    # App entry point
+├── metro.config.js             # Metro bundler configuration
+├── package.json                # Node dependencies and scripts
+├── package-lock.json           # Locked dependency tree
+└── tsconfig.json               # TypeScript compiler configuration
+```
 
 ---
 
