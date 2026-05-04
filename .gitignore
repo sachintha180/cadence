@@ -51,3 +51,7 @@ models/
 
 # Temporary
 tmp/
+
+# Python
+.venv/
+__pycache__/
